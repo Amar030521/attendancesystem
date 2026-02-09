@@ -157,7 +157,15 @@ export function AdminDashboard() {
       {dailyLoading ? <LoadingSpinner label="Loading..." /> : !filteredRows.length ? (
         <div className="bg-gray-50 border rounded-lg p-8 text-center"><p className="text-gray-600">{!dailyRows.length ? `No records for ${date}` : "No match"}</p></div>
       ) : (
-        <div className="overflow-x-auto bg-white rounded-lg shadow-sm"><table className="min-w-full text-xs"><thead><tr className="border-b text-[11px] text-gray-500 bg-gray-50 uppercase">
+        <div>
+        {/* MOBILE CARDS */}
+        <div className="md:hidden space-y-2">{filteredRows.map(row => (
+          <div key={row.id} className={`bg-white rounded-xl shadow-sm p-3 border-l-4 ${row.admin_verified ? "border-green-500" : "border-amber-400"}`}>
+            <div className="flex items-start justify-between mb-1.5"><div><div className="flex items-center gap-2"><span className="text-sm font-bold text-gray-900">{row.labour_name}</span><span className="text-[10px] text-gray-400">#{row.labour_id}</span></div><div className="text-xs text-gray-500">{row.client_name} • {row.site_name}</div></div><div className="text-right"><div className="text-sm font-bold text-green-600">{formatCurrency(row.total_pay)}</div><div className="text-[10px] text-gray-400">{row.hours_worked}h</div></div></div>
+            <div className="flex items-center justify-between pt-1.5 border-t border-gray-100"><div className="text-xs text-gray-500">{row.start_time}-{row.end_time} • R:{formatCurrency(row.regular_pay)} OT:{formatCurrency(row.ot_pay)}</div><div className="flex gap-1 ml-2 shrink-0"><button onClick={() => openEdit(row)} className="px-2 py-1 rounded-md bg-blue-50 text-blue-600 text-xs font-semibold">Edit</button>{!row.admin_verified && <button onClick={() => handleVerifyRow(row.id)} disabled={verifying} className="px-2 py-1 rounded-md bg-green-50 text-green-600 text-xs font-semibold">✓</button>}<button onClick={() => handleDeleteAtt(row.id, row.labour_name)} className="px-2 py-1 rounded-md bg-red-50 text-red-600 text-xs font-semibold">✗</button></div></div>
+          </div>))}</div>
+        {/* DESKTOP TABLE */}
+        <div className="hidden md:block overflow-x-auto bg-white rounded-lg shadow-sm"><table className="min-w-full text-xs"><thead><tr className="border-b text-[11px] text-gray-500 bg-gray-50 uppercase">
           <th className="px-2 py-2.5 text-left">ID</th><th className="px-2 py-2.5 text-left">Name</th><th className="px-2 py-2.5 text-left">Client</th><th className="px-2 py-2.5 text-left">Site</th>
           <th className="px-2 py-2.5 text-center">In</th><th className="px-2 py-2.5 text-center">Out</th><th className="px-2 py-2.5 text-right">Hours</th><th className="px-2 py-2.5 text-right">Regular</th>
           <th className="px-2 py-2.5 text-right">OT</th><th className="px-2 py-2.5 text-right">Total</th><th className="px-2 py-2.5 text-center">Status</th><th className="px-2 py-2.5 text-center">Actions</th>
@@ -173,7 +181,7 @@ export function AdminDashboard() {
               <button onClick={() => handleDeleteAtt(row.id, row.labour_name)} className="px-2 py-1 rounded bg-red-500 text-white text-[11px]">🗑</button>
             </td>
           </tr>
-        ))}</tbody></table></div>
+        ))}</tbody></table></div></div>
       )}
       {editModal && (<div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-xl shadow-2xl max-w-md w-full">
         <div className="px-6 py-4 border-b bg-gray-50 rounded-t-xl"><h3 className="text-lg font-semibold">Edit — {editModal.labour_name}</h3></div>
@@ -209,7 +217,23 @@ export function AdminDashboard() {
         </div>
         {paData.cutoffNote && <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 text-sm text-amber-800">⚠️ {paData.cutoffNote}</div>}
         <div className="bg-white rounded-lg shadow-sm overflow-hidden">
-          <table className="min-w-full text-sm"><thead className="bg-gray-50"><tr>
+          {/* MOBILE CARDS */}
+          <div className="md:hidden divide-y divide-gray-100">{paFilteredLabours.map(l => (
+            <div key={l.labour_id} className={`p-3 border-l-4 ${l.status === "present" ? "border-green-500" : l.status === "absent" ? "border-red-400" : "border-amber-400"}`}>
+              <div className="flex items-center justify-between">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2"><span className="text-sm font-bold text-gray-900 truncate">{l.name}</span><span className="text-[10px] text-gray-400 shrink-0">#{l.labour_id}</span></div>
+                  {l.status === "present" && l.attendance ? <div className="text-xs text-gray-500 mt-0.5 truncate">{l.attendance.client_name} • {l.attendance.start_time}-{l.attendance.end_time} • {l.attendance.hours_worked}h • {formatCurrency(l.attendance.total_pay)}</div> : l.status === "absent" ? <div className="text-xs text-red-400 mt-0.5">Did not check in</div> : <div className="text-xs text-amber-500 mt-0.5">Waiting...</div>}
+                </div>
+                <div className="flex items-center gap-2 ml-3 shrink-0">
+                  <span className={`w-2 h-2 rounded-full ${l.status === "present" ? "bg-green-500" : l.status === "absent" ? "bg-red-500" : "bg-amber-400"}`}></span>
+                  {l.status === "present" ? <button onClick={() => handleMarkAbsent(l)} className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-50 text-red-600 active:bg-red-100">Absent</button> : <button onClick={() => openMarkPresent(l)} className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-green-50 text-green-600 active:bg-green-100">Present</button>}
+                </div>
+              </div>
+            </div>
+          ))}</div>
+          {/* DESKTOP TABLE */}
+          <table className="hidden md:table min-w-full text-sm"><thead className="bg-gray-50"><tr>
             <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
             <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
             <th className="px-3 py-2.5 text-center text-xs font-medium text-gray-500 uppercase">Status</th>
@@ -286,7 +310,7 @@ export function AdminDashboard() {
         <div><label className="block text-xs text-gray-500 mb-1">Start</label><input type="date" value={reportStart} onChange={e => setReportStart(e.target.value)} className="border rounded-lg px-3 py-2 text-sm" /></div>
         <div><label className="block text-xs text-gray-500 mb-1">End</label><input type="date" value={reportEnd} onChange={e => setReportEnd(e.target.value)} className="border rounded-lg px-3 py-2 text-sm" /></div>
       </div></div>
-      <div className="grid md:grid-cols-2 gap-4">
+      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
         <ReportCard title="Daily Report" icon="📅" color="blue" desc={`Date: ${reportStart}`} loading={reportDownloading === "daily"} onDownload={() => dlReport(`/admin/reports/daily?date=${reportStart}&format=xlsx`, `Daily_${reportStart}.xlsx`, "daily")} />
         <ReportCard title="Monthly Summary" icon="📊" color="purple" desc={`Month: ${reportMonth}`} loading={reportDownloading === "monthly"} onDownload={() => dlReport(`/admin/reports/monthly?month=${reportMonth}&format=xlsx`, `Monthly_${reportMonth}.xlsx`, "monthly")} />
         <div className="bg-white rounded-lg shadow-sm border-l-4 border-green-500 p-4"><h3 className="font-semibold text-gray-800">👷 Labour Report</h3><p className="text-xs text-gray-500 mb-2">Individual history</p>
@@ -305,7 +329,7 @@ export function AdminDashboard() {
 
   // ========== SETTINGS ==========
   const renderSettings = () => (<div>
-    <div className="mb-6 border-b"><nav className="-mb-px flex space-x-4 overflow-x-auto">
+    <div className="mb-6 overflow-x-auto -mx-3 px-3"><nav className="flex gap-1 min-w-max border-b pb-0">
       {[{ id: "labours", l: "👷 Labours" }, { id: "clients", l: "🏢 Clients" }, { id: "sites", l: "📍 Sites" }, { id: "holidays", l: "📅 Holidays" }, { id: "config", l: "⚙️ Config" }].map(t => (
         <button key={t.id} onClick={() => setSettingsTab(t.id)} className={`px-3 py-2 text-sm font-medium border-b-2 whitespace-nowrap ${settingsTab === t.id ? "border-blue-500 text-blue-600" : "border-transparent text-gray-500"}`}>{t.l}</button>
       ))}</nav></div>
@@ -314,14 +338,16 @@ export function AdminDashboard() {
 
   return (
     <LayoutShell title="Admin Dashboard">
-      <div className="mb-4 border-b"><nav className="-mb-px flex space-x-4">
-        {[{ id: "daily", l: "📋 Daily Operations" }, { id: "attendance", l: "👥 Present / Absent" }, { id: "reports", l: "📊 Reports" }, { id: "settings", l: "⚙️ Settings" }].map(t => (
-          <button key={t.id} onClick={() => setActiveTab(t.id)} className={`px-3 py-2 text-sm font-medium border-b-2 ${activeTab === t.id ? "border-blue-600 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-700"}`}>{t.l}</button>
+      <div className="max-w-7xl mx-auto">
+      <div className="mb-4 overflow-x-auto -mx-3 px-3"><nav className="flex gap-1 min-w-max border-b pb-0">
+        {[{ id: "daily", l: "📋 Daily" }, { id: "attendance", l: "👥 Attendance" }, { id: "reports", l: "📊 Reports" }, { id: "settings", l: "⚙️ Settings" }].map(t => (
+          <button key={t.id} onClick={() => setActiveTab(t.id)} className={`px-4 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${activeTab === t.id ? "border-blue-600 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-700"}`}>{t.l}</button>
         ))}</nav></div>
       {activeTab === "daily" && renderDaily()}
       {activeTab === "attendance" && renderPA()}
       {activeTab === "reports" && renderReports()}
       {activeTab === "settings" && renderSettings()}
+      </div>
     </LayoutShell>
   );
 }
