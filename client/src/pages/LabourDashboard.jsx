@@ -306,7 +306,10 @@ export function LabourDashboard() {
               <div><span className="text-gray-500">Client:</span> <span className="font-semibold">{todayEntry.client_name}</span></div>
               <div><span className="text-gray-500">Site:</span> <span className="font-semibold">{todayEntry.site_name}</span></div>
               <div><span className="text-gray-500">Time:</span> <span className="font-semibold">{todayEntry.start_time} - {todayEntry.end_time}</span></div>
-              <div><span className="text-gray-500">Pay:</span> <span className="font-semibold text-green-700">{formatCurrency(todayEntry.total_pay)}</span></div>
+              <div><span className="text-gray-500">Hours:</span> <span className="font-semibold">{todayEntry.hours_worked}h</span></div>
+              <div><span className="text-gray-500">Regular:</span> <span className="font-semibold text-blue-700">{formatCurrency(todayEntry.regular_pay)}</span></div>
+              <div><span className="text-gray-500">OT:</span> <span className="font-semibold text-amber-700">{formatCurrency(todayEntry.ot_pay)}</span></div>
+              <div className="col-span-2"><span className="text-gray-500">Total Pay:</span> <span className="font-bold text-green-700">{formatCurrency(todayEntry.total_pay)}</span></div>
             </div>
           </div>
         )}
@@ -322,7 +325,10 @@ export function LabourDashboard() {
               <div><span className="text-gray-500">Client:</span> <span className="font-semibold">{yesterdayEntry.client_name}</span></div>
               <div><span className="text-gray-500">Site:</span> <span className="font-semibold">{yesterdayEntry.site_name}</span></div>
               <div><span className="text-gray-500">Time:</span> <span className="font-semibold">{yesterdayEntry.start_time} - {yesterdayEntry.end_time}</span></div>
-              <div><span className="text-gray-500">Pay:</span> <span className="font-semibold text-green-700">{formatCurrency(yesterdayEntry.total_pay)}</span></div>
+              <div><span className="text-gray-500">Hours:</span> <span className="font-semibold">{yesterdayEntry.hours_worked}h</span></div>
+              <div><span className="text-gray-500">Regular:</span> <span className="font-semibold text-blue-700">{formatCurrency(yesterdayEntry.regular_pay)}</span></div>
+              <div><span className="text-gray-500">OT:</span> <span className="font-semibold text-amber-700">{formatCurrency(yesterdayEntry.ot_pay)}</span></div>
+              <div className="col-span-2"><span className="text-gray-500">Total Pay:</span> <span className="font-bold text-green-700">{formatCurrency(yesterdayEntry.total_pay)}</span></div>
             </div>
           </div>
         )}
@@ -498,26 +504,31 @@ export function LabourDashboard() {
             <div className="space-y-2">
               <h3 className="text-sm font-bold text-gray-900">Records ({history.length})</h3>
               {[...history].sort((a, b) => new Date(b.date) - new Date(a.date)).map((record) => (
-                <div key={record.id} className="bg-white rounded-xl shadow-sm p-3 flex items-center justify-between">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-bold text-gray-900">
-                        {new Date(record.date).toLocaleDateString("en-GB", { day: "2-digit", month: "short", weekday: "short" })}
-                      </span>
-                      {(record.is_sunday || record.is_holiday) && (
-                        <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full font-medium">
-                          {record.is_sunday ? "Sun" : "Holiday"}
+                <div key={record.id} className="bg-white rounded-xl shadow-sm p-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-bold text-gray-900">
+                          {new Date(record.date).toLocaleDateString("en-GB", { day: "2-digit", month: "short", weekday: "short" })}
                         </span>
-                      )}
+                        {(record.is_sunday || record.is_holiday) && (
+                          <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full font-medium">
+                            {record.is_sunday ? "Sun" : "Holiday"}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-0.5">
+                        {record.client_name} • {record.hours_worked}h • {record.start_time}-{record.end_time}
+                      </div>
                     </div>
-                    <div className="text-xs text-gray-500 mt-0.5">
-                      {record.client_name} • {record.hours_worked}h • {record.start_time}-{record.end_time}
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-sm font-bold text-green-600">{formatCurrency(record.total_pay)}</div>
-                    <div className="text-[10px] text-gray-400">
-                      {record.admin_verified ? "✓ Verified" : "⏳ Pending"}
+                    <div className="text-right">
+                      <div className="text-sm font-bold text-green-600">{formatCurrency(record.total_pay)}</div>
+                      <div className="text-[10px] text-gray-500">
+                        R: {formatCurrency(record.regular_pay)} • OT: {formatCurrency(record.ot_pay)}
+                      </div>
+                      <div className="text-[10px] text-gray-400">
+                        {record.admin_verified ? "✓ Verified" : "⏳ Pending"}
+                      </div>
                     </div>
                   </div>
                 </div>

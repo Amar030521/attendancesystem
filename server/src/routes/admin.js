@@ -5,6 +5,7 @@ const bcrypt = require("bcryptjs");
 const { authMiddleware, requireRole } = require("../middleware/auth");
 const { supabase } = require("../db");
 const { calculatePayment } = require("../utils/calculatePayment");
+const { uaeNow, uaeToday, uaeYesterday } = require("../utils/uaeTime");
 const {
   generateDailyExcelReport, generateDailyPdfReport, generateMonthlyExcelReport,
   generateLabourExcelReport, generateClientExcelReport, generateSiteExcelReport,
@@ -135,10 +136,8 @@ router.get("/present-absent", async (req, res) => {
     const { date } = req.query;
     if (!date) return res.status(400).json({ message: "date required" });
 
-    const now = new Date();
-    const today = toDateStr(now);
-    const yd = new Date(now); yd.setDate(yd.getDate() - 1);
-    const yesterday = toDateStr(yd);
+    const today = uaeToday();
+    const yesterday = uaeYesterday();
 
     const { data: labours } = await supabase.from("users")
       .select("id, name, phone, daily_wage, designation")
@@ -152,8 +151,8 @@ router.get("/present-absent", async (req, res) => {
       attMap[a.labour_id] = { ...a, client_name: a.clients?.name, site_name: a.sites?.name, clients: undefined, sites: undefined };
     });
 
-    const hr = now.getHours(), mn = now.getMinutes();
-    const pastCutoff = hr > 16 || (hr === 16 && mn >= 30);
+    const uae = uaeNow();
+    const pastCutoff = uae.hours > 16 || (uae.hours === 16 && uae.minutes >= 30);
     const autoAbsent = date === yesterday && pastCutoff;
 
     const result = (labours || []).map(l => {

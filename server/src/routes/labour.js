@@ -2,10 +2,12 @@ const express = require("express");
 const { authMiddleware, requireRole } = require("../middleware/auth");
 const { supabase } = require("../db");
 const { calculatePayment } = require("../utils/calculatePayment");
+const { uaeNow, uaeToday, uaeYesterday, uaeDateStr } = require("../utils/uaeTime");
 
 const router = express.Router();
 router.use(authMiddleware, requireRole("labour"));
 
+// Legacy helper kept for non-timezone-critical formatting
 function toDateStr(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
@@ -14,11 +16,10 @@ function toDateStr(d) {
 router.get("/dashboard", async (req, res) => {
   try {
     const labourId = req.user.id;
-    const now = new Date();
-    const yd = new Date(now); yd.setDate(yd.getDate() - 1);
-    const yesterday = toDateStr(yd);
-    const today = toDateStr(now);
-    const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+    const uae = uaeNow();
+    const yesterday = uaeYesterday();
+    const today = uaeToday();
+    const monthStart = `${uae.year}-${String(uae.month).padStart(2, "0")}-01`;
 
     const { data: userInfo } = await supabase.from("users").select("designation, daily_wage").eq("id", labourId).single();
 
@@ -51,8 +52,8 @@ router.get("/dashboard", async (req, res) => {
     const cfg = {}; (cfgRows || []).forEach(r => { cfg[r.key] = r.value; });
     const cutoffHour = parseInt(cfg.cutoff_hour || "16", 10);
     const cutoffMinute = parseInt(cfg.cutoff_minute || "30", 10);
-    const currentHour = now.getHours();
-    const currentMinute = now.getMinutes();
+    const currentHour = uae.hours;
+    const currentMinute = uae.minutes;
     const yesterdayCutoffPassed = (currentHour > cutoffHour) || (currentHour === cutoffHour && currentMinute >= cutoffMinute);
 
     return res.json({
@@ -71,15 +72,16 @@ router.get("/attendance", async (req, res) => {
   try {
     const labourId = req.user.id;
     const { period = "week", start, end } = req.query;
-    const today = new Date();
+    const todayStr = uaeToday();
+    const uae = uaeNow();
 
     let startDate, endDate;
     if (period === "week") {
-      const w = new Date(today); w.setDate(today.getDate() - 7);
-      startDate = toDateStr(w); endDate = toDateStr(today);
+      const w = new Date(); w.setDate(w.getDate() - 7);
+      startDate = uaeDateStr(w); endDate = todayStr;
     } else if (period === "month") {
-      startDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-01`;
-      endDate = toDateStr(today);
+      startDate = `${uae.year}-${String(uae.month).padStart(2, "0")}-01`;
+      endDate = todayStr;
     } else if (period === "custom") {
       if (!start || !end) return res.status(400).json({ message: "Start and end required for custom period" });
       startDate = start; endDate = end;
@@ -123,9 +125,8 @@ router.post("/checkin", async (req, res) => {
     }
 
     const now = new Date();
-    const today = toDateStr(now);
-    const yd = new Date(now); yd.setDate(yd.getDate() - 1);
-    const yesterday = toDateStr(yd);
+    const today = uaeToday();
+    const yesterday = uaeYesterday();
 
     let workDate = date || today;
     if (workDate !== today && workDate !== yesterday) {
@@ -135,14 +136,14 @@ router.post("/checkin", async (req, res) => {
       if (diffDays > 1) return res.status(400).json({ message: "Can only submit for today or yesterday" });
     }
 
-    // Block yesterday's submission after cutoff time (default 4:30 PM)
+    // Block yesterday's submission after cutoff time (default 4:30 PM UAE)
     if (workDate === yesterday) {
       const { data: cfgRows } = await supabase.from("config").select("key, value");
       const cfg = {}; (cfgRows || []).forEach(r => { cfg[r.key] = r.value; });
       const cutoffH = parseInt(cfg.cutoff_hour || "16", 10);
       const cutoffM = parseInt(cfg.cutoff_minute || "30", 10);
-      const h = now.getHours(), m = now.getMinutes();
-      if (h > cutoffH || (h === cutoffH && m >= cutoffM)) {
+      const uae = uaeNow();
+      if (uae.hours > cutoffH || (uae.hours === cutoffH && uae.minutes >= cutoffM)) {
         return res.status(400).json({ message: "Yesterday's cutoff time (4:30 PM) has passed. Contact admin to mark your attendance." });
       }
     }
