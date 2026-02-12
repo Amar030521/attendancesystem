@@ -47,6 +47,7 @@ export function LabourDashboard() {
   const [history, setHistory] = useState([]);
   const [customRange, setCustomRange] = useState({ start: todayISO(), end: todayISO() });
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [selectedRecord, setSelectedRecord] = useState(null);
 
   // Active tab: "home" | "checkin" | "history"
   const [activeTab, setActiveTab] = useState("home");
@@ -500,13 +501,13 @@ export function LabourDashboard() {
               </div>
             )}
 
-            {/* Records List - Mobile friendly cards instead of table */}
+            {/* Records List */}
             <div className="space-y-2">
               <h3 className="text-sm font-bold text-gray-900">Records ({history.length})</h3>
               {[...history].sort((a, b) => new Date(b.date) - new Date(a.date)).map((record) => (
-                <div key={record.id} className="bg-white rounded-xl shadow-sm p-3">
+                <div key={record.id} onClick={() => setSelectedRecord(record)} className="bg-white rounded-xl shadow-sm p-3 active:bg-gray-50 cursor-pointer transition-colors">
                   <div className="flex items-center justify-between">
-                    <div>
+                    <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-bold text-gray-900">
                           {new Date(record.date).toLocaleDateString("en-GB", { day: "2-digit", month: "short", weekday: "short" })}
@@ -516,24 +517,64 @@ export function LabourDashboard() {
                             {record.is_sunday ? "Sun" : "Holiday"}
                           </span>
                         )}
+                        {record.admin_verified && <span className="text-[10px] text-green-500">✓</span>}
                       </div>
-                      <div className="text-xs text-gray-500 mt-0.5">
+                      <div className="text-xs text-gray-500 mt-0.5 truncate">
                         {record.client_name} • {record.hours_worked}h • {record.start_time}-{record.end_time}
                       </div>
                     </div>
-                    <div className="text-right">
-                      <div className="text-sm font-bold text-green-600">{formatCurrency(record.total_pay)}</div>
-                      <div className="text-[10px] text-gray-500">
-                        R: {formatCurrency(record.regular_pay)} • OT: {formatCurrency(record.ot_pay)}
-                      </div>
-                      <div className="text-[10px] text-gray-400">
-                        {record.admin_verified ? "✓ Verified" : "⏳ Pending"}
-                      </div>
+                    <div className="flex items-center gap-2 shrink-0 ml-3">
+                      <span className="text-base font-bold text-green-600">{formatCurrency(record.total_pay)}</span>
+                      <svg className="w-4 h-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
                     </div>
                   </div>
                 </div>
               ))}
             </div>
+
+            {/* Record Detail Popup */}
+            {selectedRecord && (
+              <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50" onClick={() => setSelectedRecord(null)}>
+                <div className="bg-white w-full sm:max-w-sm sm:rounded-2xl rounded-t-2xl shadow-2xl" onClick={e => e.stopPropagation()}>
+                  <div className="px-5 py-4 border-b bg-gray-50 sm:rounded-t-2xl rounded-t-2xl flex items-center justify-between">
+                    <div>
+                      <h3 className="text-base font-bold text-gray-900">
+                        {new Date(selectedRecord.date).toLocaleDateString("en-GB", { weekday: "long", day: "2-digit", month: "short", year: "numeric" })}
+                      </h3>
+                      <p className="text-xs text-gray-500 mt-0.5">{selectedRecord.client_name} • {selectedRecord.site_name || ""}</p>
+                    </div>
+                    <button onClick={() => setSelectedRecord(null)} className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-gray-500 text-lg">×</button>
+                  </div>
+                  <div className="px-5 py-4 space-y-3">
+                    {/* Total */}
+                    <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-center">
+                      <div className="text-xs text-green-600 font-medium">Total Earnings</div>
+                      <div className="text-2xl font-bold text-green-700">{formatCurrency(selectedRecord.total_pay)}</div>
+                    </div>
+                    {/* Breakdown */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="bg-blue-50 border border-blue-100 rounded-lg p-2.5 text-center">
+                        <div className="text-[10px] text-blue-500 font-medium">Regular Pay</div>
+                        <div className="text-sm font-bold text-blue-700">{formatCurrency(selectedRecord.regular_pay)}</div>
+                      </div>
+                      <div className="bg-amber-50 border border-amber-100 rounded-lg p-2.5 text-center">
+                        <div className="text-[10px] text-amber-500 font-medium">OT Pay</div>
+                        <div className="text-sm font-bold text-amber-700">{formatCurrency(selectedRecord.ot_pay)}</div>
+                      </div>
+                    </div>
+                    {/* Details */}
+                    <div className="bg-gray-50 rounded-xl p-3 space-y-1.5 text-sm">
+                      <div className="flex justify-between"><span className="text-gray-500">Shift</span><span className="font-medium">{selectedRecord.start_time} - {selectedRecord.end_time}</span></div>
+                      <div className="flex justify-between"><span className="text-gray-500">Hours Worked</span><span className="font-medium">{selectedRecord.hours_worked}h</span></div>
+                      <div className="flex justify-between"><span className="text-gray-500">Client</span><span className="font-medium">{selectedRecord.client_name}</span></div>
+                      {selectedRecord.is_sunday && <div className="flex justify-between"><span className="text-gray-500">Day Type</span><span className="font-medium text-purple-600">Sunday (1.5x OT)</span></div>}
+                      {selectedRecord.is_holiday && <div className="flex justify-between"><span className="text-gray-500">Day Type</span><span className="font-medium text-purple-600">Holiday</span></div>}
+                      <div className="flex justify-between"><span className="text-gray-500">Status</span><span className={`font-medium ${selectedRecord.admin_verified ? "text-green-600" : "text-amber-500"}`}>{selectedRecord.admin_verified ? "✓ Verified" : "⏳ Pending"}</span></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </>
         ) : (
           <div className="bg-white rounded-2xl shadow-md p-8 text-center">

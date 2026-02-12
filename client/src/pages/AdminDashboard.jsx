@@ -9,6 +9,9 @@ import { ConfigManagement } from "../components/ConfigManagement";
 import { IncentiveManagement } from "../components/IncentiveManagement";
 import { ManagerManagement } from "../components/ManagerManagement";
 import { api } from "../api";
+import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, PointElement, LineElement, ArcElement, Title, Tooltip, Legend, Filler } from "chart.js";
+import { Bar, Pie, Line } from "react-chartjs-2";
+ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineElement, ArcElement, Title, Tooltip, Legend, Filler);
 
 function formatCurrency(a) { return new Intl.NumberFormat("en-AE", { style: "currency", currency: "AED", minimumFractionDigits: 2 }).format(a || 0); }
 const todayISO = () => new Date().toISOString().slice(0, 10);
@@ -143,31 +146,76 @@ export function AdminDashboard() {
 
   // ========== DAILY OPERATIONS ==========
   // ==================== OVERVIEW / ANALYTICS ====================
+  const COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#06b6d4", "#84cc16", "#f97316", "#6366f1"];
   const renderOverview = () => {
     if (analyticsLoading) return <LoadingSpinner label="Loading analytics..." />;
     if (!analytics) return <div className="text-center text-gray-500 py-8">No data</div>;
     const { summary: s, dailyTrend, clientBreakdown, siteBreakdown, topLabours } = analytics;
-    const maxClientWage = clientBreakdown.length ? Math.max(...clientBreakdown.map(c => c.wages)) : 1;
-    const maxSiteWage = siteBreakdown.length ? Math.max(...siteBreakdown.map(c => c.wages)) : 1;
-    const maxLabourWage = topLabours.length ? Math.max(...topLabours.map(l => l.wages)) : 1;
-    const maxTrendCount = dailyTrend.length ? Math.max(...dailyTrend.map(d => d.count)) : 1;
-    const maxTrendWage = dailyTrend.length ? Math.max(...dailyTrend.map(d => d.wages)) : 1;
+
+    // Daily Trend — combo: bars for workers, line for wages
+    const trendLabels = dailyTrend.map(d => d.date.slice(5));
+    const trendData = {
+      labels: trendLabels,
+      datasets: [
+        { type: "bar", label: "Workers", data: dailyTrend.map(d => d.count), backgroundColor: "rgba(59,130,246,0.7)", borderRadius: 4, yAxisID: "y", order: 2 },
+        { type: "line", label: "Wages (AED)", data: dailyTrend.map(d => Math.round(d.wages)), borderColor: "#10b981", backgroundColor: "rgba(16,185,129,0.1)", fill: true, tension: 0.3, pointRadius: 4, pointBackgroundColor: "#10b981", yAxisID: "y1", order: 1 },
+      ],
+    };
+    const trendOpts = {
+      responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
+      plugins: { legend: { position: "top", labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 } } }, tooltip: { callbacks: { label: (ctx) => ctx.dataset.label === "Wages (AED)" ? `${ctx.dataset.label}: AED ${ctx.raw}` : `${ctx.dataset.label}: ${ctx.raw}` } } },
+      scales: { y: { beginAtZero: true, title: { display: true, text: "Workers", font: { size: 11 } }, ticks: { stepSize: 1 } }, y1: { position: "right", beginAtZero: true, title: { display: true, text: "Wages (AED)", font: { size: 11 } }, grid: { drawOnChartArea: false } }, x: { ticks: { font: { size: 10 } } } },
+    };
+
+    // Client Pie
+    const pieData = {
+      labels: clientBreakdown.map(c => c.client_name),
+      datasets: [{ data: clientBreakdown.map(c => Math.round(c.wages * 100) / 100), backgroundColor: COLORS.slice(0, clientBreakdown.length), borderWidth: 2, borderColor: "#fff" }],
+    };
+    const pieOpts = {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: "bottom", labels: { usePointStyle: true, boxWidth: 8, padding: 12, font: { size: 11 } } }, tooltip: { callbacks: { label: (ctx) => `${ctx.label}: AED ${ctx.raw} (${Math.round(ctx.raw / clientBreakdown.reduce((s, c) => s + c.wages, 0) * 100)}%)` } } },
+    };
+
+    // Site horizontal bar
+    const siteData = {
+      labels: siteBreakdown.map(s => `${s.site_name}`),
+      datasets: [{ label: "Wages (AED)", data: siteBreakdown.map(s => Math.round(s.wages * 100) / 100), backgroundColor: COLORS.slice(0, siteBreakdown.length).map(c => c + "cc"), borderRadius: 4 }],
+    };
+    const siteOpts = {
+      indexAxis: "y", responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => `AED ${ctx.raw} (${siteBreakdown[ctx.dataIndex]?.days || 0}d)` } } },
+      scales: { x: { beginAtZero: true, title: { display: true, text: "AED", font: { size: 10 } } }, y: { ticks: { font: { size: 11 } } } },
+    };
+
+    // Top earners horizontal bar
+    const earnerData = {
+      labels: topLabours.map(l => l.name),
+      datasets: [{ label: "Earnings (AED)", data: topLabours.map(l => Math.round(l.wages * 100) / 100), backgroundColor: topLabours.map((_, i) => i < 3 ? "rgba(245,158,11,0.8)" : "rgba(59,130,246,0.6)"), borderRadius: 4 }],
+    };
+    const earnerOpts = {
+      indexAxis: "y", responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => { const l = topLabours[ctx.dataIndex]; return `AED ${ctx.raw} (${l?.days}d • ${Math.round(l?.hours)}h)`; } } } },
+      scales: { x: { beginAtZero: true, title: { display: true, text: "AED", font: { size: 10 } } }, y: { ticks: { font: { size: 11 } } } },
+    };
+
     return (
       <div className="space-y-4">
         {/* Key Metrics */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {[
-            { l: "Active Labours", v: s.totalLabours, icon: "👷", c: "bg-blue-50 text-blue-700" },
-            { l: "Present Today", v: `${s.presentToday}/${s.totalLabours}`, icon: "✅", c: "bg-green-50 text-green-700" },
-            { l: "Month Wages", v: formatCurrency(s.totalWagesMonth), icon: "💰", c: "bg-purple-50 text-purple-700" },
-            { l: "Month Hours", v: `${Math.round(s.totalHoursMonth)}h`, icon: "⏱️", c: "bg-amber-50 text-amber-700" },
+            { l: "Active Labours", v: s.totalLabours, icon: "👷", c: "bg-blue-50 text-blue-700 border-blue-200" },
+            { l: "Present Today", v: `${s.presentToday}/${s.totalLabours}`, icon: "✅", c: "bg-green-50 text-green-700 border-green-200" },
+            { l: "Month Wages", v: formatCurrency(s.totalWagesMonth), icon: "💰", c: "bg-purple-50 text-purple-700 border-purple-200" },
+            { l: "Month Hours", v: `${Math.round(s.totalHoursMonth)}h`, icon: "⏱️", c: "bg-amber-50 text-amber-700 border-amber-200" },
           ].map((m, i) => (
-            <div key={i} className={`${m.c} rounded-xl p-4`}>
+            <div key={i} className={`${m.c} rounded-xl p-4 border`}>
               <div className="text-xs font-medium opacity-80">{m.icon} {m.l}</div>
               <div className="text-xl md:text-2xl font-bold mt-1">{m.v}</div>
             </div>
           ))}
         </div>
+
         {/* Secondary Metrics */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {[
@@ -176,102 +224,44 @@ export function AdminDashboard() {
             { l: "Avg/Entry", v: formatCurrency(s.avgDailyWage), c: "text-green-600" },
             { l: "Work Days", v: s.uniqueWorkDays, c: "text-gray-700" },
           ].map((m, i) => (
-            <div key={i} className="bg-white rounded-xl shadow-sm p-3">
+            <div key={i} className="bg-white rounded-xl shadow-sm p-3 border border-gray-100">
               <div className="text-xs text-gray-500">{m.l}</div>
               <div className={`text-lg font-bold ${m.c}`}>{m.v}</div>
             </div>
           ))}
         </div>
-        {/* Daily Attendance Trend */}
+
+        {/* Daily Attendance + Wages Trend */}
         {dailyTrend.length > 0 && (
-          <div className="bg-white rounded-xl shadow-sm p-4">
+          <div className="bg-white rounded-xl shadow-sm p-4 border border-gray-100">
             <h3 className="text-sm font-bold text-gray-900 mb-3">📈 Daily Trend (Last 14 Days)</h3>
-            <div className="space-y-0.5">
-              {dailyTrend.map(d => (
-                <div key={d.date} className="flex items-center gap-2 text-xs">
-                  <span className="w-12 text-gray-500 shrink-0">{d.date.slice(5)}</span>
-                  <div className="flex-1 flex gap-1 items-center">
-                    <div className="bg-blue-500 rounded-sm h-4" style={{ width: `${Math.max((d.count / maxTrendCount) * 60, 2)}%` }}></div>
-                    <div className="bg-green-400 rounded-sm h-4 opacity-70" style={{ width: `${Math.max((d.wages / maxTrendWage) * 35, 1)}%` }}></div>
-                  </div>
-                  <span className="w-8 text-right text-gray-700 font-medium shrink-0">{d.count}</span>
-                  <span className="w-20 text-right text-green-600 shrink-0 hidden sm:inline">{formatCurrency(d.wages)}</span>
-                </div>
-              ))}
-            </div>
-            <div className="flex gap-4 mt-2 text-[10px] text-gray-400">
-              <span className="flex items-center gap-1"><span className="w-3 h-2 bg-blue-500 rounded-sm inline-block"></span> Workers</span>
-              <span className="flex items-center gap-1"><span className="w-3 h-2 bg-green-400 rounded-sm inline-block"></span> Wages</span>
-            </div>
+            <div style={{ height: 280 }}><Bar data={trendData} options={trendOpts} /></div>
           </div>
         )}
+
         <div className="grid md:grid-cols-2 gap-4">
-          {/* Client Breakdown */}
+          {/* Client Revenue Pie */}
           {clientBreakdown.length > 0 && (
-            <div className="bg-white rounded-xl shadow-sm p-4">
-              <h3 className="text-sm font-bold text-gray-900 mb-3">🏢 Client Breakdown (This Month)</h3>
-              <div className="space-y-2">
-                {clientBreakdown.map(c => (
-                  <div key={c.client_id}>
-                    <div className="flex items-center justify-between text-xs mb-0.5">
-                      <span className="font-medium text-gray-800 truncate">{c.client_name}</span>
-                      <span className="text-green-600 font-semibold shrink-0 ml-2">{formatCurrency(c.wages)}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className="flex-1 bg-gray-100 rounded-full h-2.5"><div className="bg-blue-500 h-2.5 rounded-full" style={{ width: `${(c.wages / maxClientWage) * 100}%` }}></div></div>
-                      <span className="text-[10px] text-gray-400 shrink-0">{c.workers}w • {c.days}d</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
+            <div className="bg-white rounded-xl shadow-sm p-4 border border-gray-100">
+              <h3 className="text-sm font-bold text-gray-900 mb-3">🏢 Client Revenue Share (This Month)</h3>
+              <div style={{ height: 260 }}><Pie data={pieData} options={pieOpts} /></div>
             </div>
           )}
-          {/* Top Sites */}
+
+          {/* Top Sites Bar */}
           {siteBreakdown.length > 0 && (
-            <div className="bg-white rounded-xl shadow-sm p-4">
+            <div className="bg-white rounded-xl shadow-sm p-4 border border-gray-100">
               <h3 className="text-sm font-bold text-gray-900 mb-3">📍 Top Sites (This Month)</h3>
-              <div className="space-y-2">
-                {siteBreakdown.map(s => (
-                  <div key={s.site_id}>
-                    <div className="flex items-center justify-between text-xs mb-0.5">
-                      <span className="font-medium text-gray-800 truncate">{s.site_name} <span className="text-gray-400">({s.client_name})</span></span>
-                      <span className="text-green-600 font-semibold shrink-0 ml-2">{formatCurrency(s.wages)}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className="flex-1 bg-gray-100 rounded-full h-2.5"><div className="bg-purple-500 h-2.5 rounded-full" style={{ width: `${(s.wages / maxSiteWage) * 100}%` }}></div></div>
-                      <span className="text-[10px] text-gray-400 shrink-0">{s.days}d</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <div style={{ height: Math.max(siteBreakdown.length * 40, 160) }}><Bar data={siteData} options={siteOpts} /></div>
             </div>
           )}
         </div>
-        {/* Top Labours */}
+
+        {/* Top Earners */}
         {topLabours.length > 0 && (
-          <div className="bg-white rounded-xl shadow-sm p-4">
+          <div className="bg-white rounded-xl shadow-sm p-4 border border-gray-100">
             <h3 className="text-sm font-bold text-gray-900 mb-3">🏆 Top Earners (This Month)</h3>
-            <div className="md:hidden space-y-1.5">
-              {topLabours.map((l, i) => (
-                <div key={l.labour_id} className="flex items-center gap-2">
-                  <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${i < 3 ? "bg-amber-100 text-amber-700" : "bg-gray-100 text-gray-500"}`}>{i + 1}</span>
-                  <span className="text-sm font-medium text-gray-800 flex-1 truncate">{l.name}</span>
-                  <span className="text-xs text-gray-400">{l.days}d</span>
-                  <span className="text-sm font-bold text-green-600">{formatCurrency(l.wages)}</span>
-                </div>
-              ))}
-            </div>
-            <div className="hidden md:block space-y-1.5">
-              {topLabours.map((l, i) => (
-                <div key={l.labour_id} className="flex items-center gap-3">
-                  <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${i < 3 ? "bg-amber-100 text-amber-700" : "bg-gray-100 text-gray-500"}`}>{i + 1}</span>
-                  <span className="text-sm font-medium text-gray-800 w-40 truncate">{l.name}</span>
-                  <div className="flex-1 bg-gray-100 rounded-full h-2.5"><div className="bg-green-500 h-2.5 rounded-full" style={{ width: `${(l.wages / maxLabourWage) * 100}%` }}></div></div>
-                  <span className="text-xs text-gray-400 w-16 text-right">{l.days}d • {Math.round(l.hours)}h</span>
-                  <span className="text-sm font-bold text-green-600 w-24 text-right">{formatCurrency(l.wages)}</span>
-                </div>
-              ))}
-            </div>
+            <div style={{ height: Math.max(topLabours.length * 36, 180) }}><Bar data={earnerData} options={earnerOpts} /></div>
           </div>
         )}
       </div>
