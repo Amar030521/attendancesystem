@@ -9,6 +9,7 @@ dotenv.config();
 const authRoutes = require("./routes/auth");
 const labourRoutes = require("./routes/labour");
 const adminRoutes = require("./routes/admin");
+const managerRoutes = require("./routes/manager");
 const { supabase } = require("./db");
 
 const app = express();
@@ -151,6 +152,7 @@ app.get("/api/public/config", async (_req, res) => {
 app.use("/api/auth", loginLimiter, authRoutes);
 app.use("/api/labour", labourRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/manager", managerRoutes);
 
 /* ===============================
    GLOBAL ERROR HANDLER

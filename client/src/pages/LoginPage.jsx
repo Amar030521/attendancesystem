@@ -21,7 +21,8 @@ export function LoginPage() {
       setLoading(true);
       const res = await api.post("/auth/login", { username, pin });
       setAuth(res.data.token, res.data.user);
-      navigate(res.data.user.role === "admin" ? "/admin" : "/labour");
+      const role = res.data.user.role;
+      navigate(role === "admin" ? "/admin" : role === "manager" ? "/manager" : "/labour");
     } catch (err) {
       setError(err.response?.data?.message || "Login failed. Please check credentials.");
     } finally {

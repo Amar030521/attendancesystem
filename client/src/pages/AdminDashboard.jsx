@@ -6,6 +6,8 @@ import { ClientManagement } from "../components/ClientManagement";
 import { SiteManagement } from "../components/SiteManagement";
 import { HolidayManagement } from "../components/HolidayManagement";
 import { ConfigManagement } from "../components/ConfigManagement";
+import { IncentiveManagement } from "../components/IncentiveManagement";
+import { ManagerManagement } from "../components/ManagerManagement";
 import { api } from "../api";
 
 function formatCurrency(a) { return new Intl.NumberFormat("en-AE", { style: "currency", currency: "AED", minimumFractionDigits: 2 }).format(a || 0); }
@@ -38,8 +40,10 @@ function ReportCard({ title, icon, color, desc, loading, onDownload }) {
 }
 
 export function AdminDashboard() {
-  const [activeTab, setActiveTab] = useState("daily");
+  const [activeTab, setActiveTab] = useState("overview");
   const [settingsTab, setSettingsTab] = useState("labours");
+  const [analytics, setAnalytics] = useState(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
 
   // DAILY
   const [date, setDate] = useState(todayISO());
@@ -77,11 +81,13 @@ export function AdminDashboard() {
   const [reportDownloading, setReportDownloading] = useState("");
 
   useEffect(() => { loadMaster(); }, []);
+  useEffect(() => { if (activeTab === "overview") loadAnalytics(); }, [activeTab]);
   useEffect(() => { if (activeTab === "daily") loadDaily(); }, [date, activeTab]);
   useEffect(() => { if (activeTab === "attendance") loadPA(); }, [paDate, activeTab]);
   useEffect(() => { if (activeTab === "reports") loadReportData(); }, [activeTab]);
 
   async function loadMaster() { try { const [c, s] = await Promise.all([api.get("/admin/clients"), api.get("/admin/sites")]); setClients(c.data || []); setSites(s.data || []); } catch (e) { console.error(e); } }
+  async function loadAnalytics() { try { setAnalyticsLoading(true); const { data } = await api.get("/admin/analytics"); setAnalytics(data); } catch (e) { console.error(e); } finally { setAnalyticsLoading(false); } }
   async function loadDaily() { try { setDailyLoading(true); setDailyRows((await api.get(`/admin/attendance?date=${date}`)).data); } catch (e) { console.error(e); } finally { setDailyLoading(false); } }
   async function loadPA() { try { setPaLoading(true); setPaData((await api.get(`/admin/present-absent?date=${paDate}`)).data); } catch (e) { console.error(e); } finally { setPaLoading(false); } }
   async function loadReportData() { try { const [l, c, s] = await Promise.all([api.get("/admin/labours"), api.get("/admin/clients"), api.get("/admin/sites")]); setReportLabours(l.data || []); setReportClients(c.data || []); setReportSites(s.data || []); } catch (e) { console.error(e); } }
@@ -136,6 +142,142 @@ export function AdminDashboard() {
   }
 
   // ========== DAILY OPERATIONS ==========
+  // ==================== OVERVIEW / ANALYTICS ====================
+  const renderOverview = () => {
+    if (analyticsLoading) return <LoadingSpinner label="Loading analytics..." />;
+    if (!analytics) return <div className="text-center text-gray-500 py-8">No data</div>;
+    const { summary: s, dailyTrend, clientBreakdown, siteBreakdown, topLabours } = analytics;
+    const maxClientWage = clientBreakdown.length ? Math.max(...clientBreakdown.map(c => c.wages)) : 1;
+    const maxSiteWage = siteBreakdown.length ? Math.max(...siteBreakdown.map(c => c.wages)) : 1;
+    const maxLabourWage = topLabours.length ? Math.max(...topLabours.map(l => l.wages)) : 1;
+    const maxTrendCount = dailyTrend.length ? Math.max(...dailyTrend.map(d => d.count)) : 1;
+    const maxTrendWage = dailyTrend.length ? Math.max(...dailyTrend.map(d => d.wages)) : 1;
+    return (
+      <div className="space-y-4">
+        {/* Key Metrics */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {[
+            { l: "Active Labours", v: s.totalLabours, icon: "👷", c: "bg-blue-50 text-blue-700" },
+            { l: "Present Today", v: `${s.presentToday}/${s.totalLabours}`, icon: "✅", c: "bg-green-50 text-green-700" },
+            { l: "Month Wages", v: formatCurrency(s.totalWagesMonth), icon: "💰", c: "bg-purple-50 text-purple-700" },
+            { l: "Month Hours", v: `${Math.round(s.totalHoursMonth)}h`, icon: "⏱️", c: "bg-amber-50 text-amber-700" },
+          ].map((m, i) => (
+            <div key={i} className={`${m.c} rounded-xl p-4`}>
+              <div className="text-xs font-medium opacity-80">{m.icon} {m.l}</div>
+              <div className="text-xl md:text-2xl font-bold mt-1">{m.v}</div>
+            </div>
+          ))}
+        </div>
+        {/* Secondary Metrics */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {[
+            { l: "Regular Pay", v: formatCurrency(s.totalRegularMonth), c: "text-blue-600" },
+            { l: "OT Pay", v: formatCurrency(s.totalOTMonth), c: "text-amber-600" },
+            { l: "Avg/Entry", v: formatCurrency(s.avgDailyWage), c: "text-green-600" },
+            { l: "Work Days", v: s.uniqueWorkDays, c: "text-gray-700" },
+          ].map((m, i) => (
+            <div key={i} className="bg-white rounded-xl shadow-sm p-3">
+              <div className="text-xs text-gray-500">{m.l}</div>
+              <div className={`text-lg font-bold ${m.c}`}>{m.v}</div>
+            </div>
+          ))}
+        </div>
+        {/* Daily Attendance Trend */}
+        {dailyTrend.length > 0 && (
+          <div className="bg-white rounded-xl shadow-sm p-4">
+            <h3 className="text-sm font-bold text-gray-900 mb-3">📈 Daily Trend (Last 14 Days)</h3>
+            <div className="space-y-0.5">
+              {dailyTrend.map(d => (
+                <div key={d.date} className="flex items-center gap-2 text-xs">
+                  <span className="w-12 text-gray-500 shrink-0">{d.date.slice(5)}</span>
+                  <div className="flex-1 flex gap-1 items-center">
+                    <div className="bg-blue-500 rounded-sm h-4" style={{ width: `${Math.max((d.count / maxTrendCount) * 60, 2)}%` }}></div>
+                    <div className="bg-green-400 rounded-sm h-4 opacity-70" style={{ width: `${Math.max((d.wages / maxTrendWage) * 35, 1)}%` }}></div>
+                  </div>
+                  <span className="w-8 text-right text-gray-700 font-medium shrink-0">{d.count}</span>
+                  <span className="w-20 text-right text-green-600 shrink-0 hidden sm:inline">{formatCurrency(d.wages)}</span>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-4 mt-2 text-[10px] text-gray-400">
+              <span className="flex items-center gap-1"><span className="w-3 h-2 bg-blue-500 rounded-sm inline-block"></span> Workers</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-2 bg-green-400 rounded-sm inline-block"></span> Wages</span>
+            </div>
+          </div>
+        )}
+        <div className="grid md:grid-cols-2 gap-4">
+          {/* Client Breakdown */}
+          {clientBreakdown.length > 0 && (
+            <div className="bg-white rounded-xl shadow-sm p-4">
+              <h3 className="text-sm font-bold text-gray-900 mb-3">🏢 Client Breakdown (This Month)</h3>
+              <div className="space-y-2">
+                {clientBreakdown.map(c => (
+                  <div key={c.client_id}>
+                    <div className="flex items-center justify-between text-xs mb-0.5">
+                      <span className="font-medium text-gray-800 truncate">{c.client_name}</span>
+                      <span className="text-green-600 font-semibold shrink-0 ml-2">{formatCurrency(c.wages)}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 bg-gray-100 rounded-full h-2.5"><div className="bg-blue-500 h-2.5 rounded-full" style={{ width: `${(c.wages / maxClientWage) * 100}%` }}></div></div>
+                      <span className="text-[10px] text-gray-400 shrink-0">{c.workers}w • {c.days}d</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {/* Top Sites */}
+          {siteBreakdown.length > 0 && (
+            <div className="bg-white rounded-xl shadow-sm p-4">
+              <h3 className="text-sm font-bold text-gray-900 mb-3">📍 Top Sites (This Month)</h3>
+              <div className="space-y-2">
+                {siteBreakdown.map(s => (
+                  <div key={s.site_id}>
+                    <div className="flex items-center justify-between text-xs mb-0.5">
+                      <span className="font-medium text-gray-800 truncate">{s.site_name} <span className="text-gray-400">({s.client_name})</span></span>
+                      <span className="text-green-600 font-semibold shrink-0 ml-2">{formatCurrency(s.wages)}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 bg-gray-100 rounded-full h-2.5"><div className="bg-purple-500 h-2.5 rounded-full" style={{ width: `${(s.wages / maxSiteWage) * 100}%` }}></div></div>
+                      <span className="text-[10px] text-gray-400 shrink-0">{s.days}d</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+        {/* Top Labours */}
+        {topLabours.length > 0 && (
+          <div className="bg-white rounded-xl shadow-sm p-4">
+            <h3 className="text-sm font-bold text-gray-900 mb-3">🏆 Top Earners (This Month)</h3>
+            <div className="md:hidden space-y-1.5">
+              {topLabours.map((l, i) => (
+                <div key={l.labour_id} className="flex items-center gap-2">
+                  <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${i < 3 ? "bg-amber-100 text-amber-700" : "bg-gray-100 text-gray-500"}`}>{i + 1}</span>
+                  <span className="text-sm font-medium text-gray-800 flex-1 truncate">{l.name}</span>
+                  <span className="text-xs text-gray-400">{l.days}d</span>
+                  <span className="text-sm font-bold text-green-600">{formatCurrency(l.wages)}</span>
+                </div>
+              ))}
+            </div>
+            <div className="hidden md:block space-y-1.5">
+              {topLabours.map((l, i) => (
+                <div key={l.labour_id} className="flex items-center gap-3">
+                  <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${i < 3 ? "bg-amber-100 text-amber-700" : "bg-gray-100 text-gray-500"}`}>{i + 1}</span>
+                  <span className="text-sm font-medium text-gray-800 w-40 truncate">{l.name}</span>
+                  <div className="flex-1 bg-gray-100 rounded-full h-2.5"><div className="bg-green-500 h-2.5 rounded-full" style={{ width: `${(l.wages / maxLabourWage) * 100}%` }}></div></div>
+                  <span className="text-xs text-gray-400 w-16 text-right">{l.days}d • {Math.round(l.hours)}h</span>
+                  <span className="text-sm font-bold text-green-600 w-24 text-right">{formatCurrency(l.wages)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderDaily = () => (
     <div className="space-y-4">
       <div className="bg-white rounded-lg shadow-sm p-4"><div className="flex flex-wrap items-end gap-4">
@@ -317,6 +459,7 @@ export function AdminDashboard() {
           <select value={selectedLabour} onChange={e => setSelectedLabour(e.target.value)} className="w-full px-3 py-2 border rounded-lg text-sm mb-3"><option value="">Select...</option>{reportLabours.filter(l => l.status === "active").map(l => <option key={l.id} value={l.id}>{l.id} — {l.name}</option>)}</select>
           <button onClick={() => dlReport(`/admin/reports/labour/${selectedLabour}?month=${reportMonth}&format=xlsx`, `Labour_${selectedLabour}.xlsx`, "labour")} disabled={!selectedLabour || reportDownloading === "labour"} className="w-full px-3 py-2 bg-green-600 text-white text-sm font-semibold rounded-lg disabled:opacity-40">{reportDownloading === "labour" ? "..." : "📥 Download"}</button></div>
         <ReportCard title="Payroll Summary" icon="💰" color="red" desc={`Month: ${reportMonth}`} loading={reportDownloading === "payroll"} onDownload={() => dlReport(`/admin/reports/payroll?month=${reportMonth}&format=xlsx`, `Payroll_${reportMonth}.xlsx`, "payroll")} />
+        <ReportCard title="Payroll + Incentives" icon="🏆" color="orange" desc={`Month: ${reportMonth}`} loading={reportDownloading === "payroll-inc"} onDownload={() => dlReport(`/admin/reports/payroll-with-incentives?month=${reportMonth}&format=xlsx`, `Payroll_Incentives_${reportMonth}.xlsx`, "payroll-inc")} />
         <div className="bg-white rounded-lg shadow-sm border-l-4 border-orange-500 p-4"><h3 className="font-semibold text-gray-800">🏢 Client Report</h3><p className="text-xs text-gray-500 mb-2">{reportStart} to {reportEnd}</p>
           <select value={selectedClient} onChange={e => { setSelectedClient(e.target.value); setSelectedSite(""); }} className="w-full px-3 py-2 border rounded-lg text-sm mb-3"><option value="">Select...</option>{reportClients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
           <button onClick={() => dlReport(`/admin/reports/client/${selectedClient}?start=${reportStart}&end=${reportEnd}&format=xlsx`, `Client_${selectedClient}.xlsx`, "client")} disabled={!selectedClient || reportDownloading === "client"} className="w-full px-3 py-2 bg-orange-600 text-white text-sm font-semibold rounded-lg disabled:opacity-40">{reportDownloading === "client" ? "..." : "📥 Download"}</button></div>
@@ -330,19 +473,20 @@ export function AdminDashboard() {
   // ========== SETTINGS ==========
   const renderSettings = () => (<div>
     <div className="mb-6 overflow-x-auto -mx-3 px-3"><nav className="flex gap-1 min-w-max border-b pb-0">
-      {[{ id: "labours", l: "👷 Labours" }, { id: "clients", l: "🏢 Clients" }, { id: "sites", l: "📍 Sites" }, { id: "holidays", l: "📅 Holidays" }, { id: "config", l: "⚙️ Config" }].map(t => (
+      {[{ id: "labours", l: "👷 Labours" }, { id: "clients", l: "🏢 Clients" }, { id: "sites", l: "📍 Sites" }, { id: "holidays", l: "📅 Holidays" }, { id: "incentives", l: "💰 Incentives" }, { id: "managers", l: "👤 Managers" }, { id: "config", l: "⚙️ Config" }].map(t => (
         <button key={t.id} onClick={() => setSettingsTab(t.id)} className={`px-3 py-2 text-sm font-medium border-b-2 whitespace-nowrap ${settingsTab === t.id ? "border-blue-500 text-blue-600" : "border-transparent text-gray-500"}`}>{t.l}</button>
       ))}</nav></div>
-    {settingsTab === "labours" && <LabourManagement />}{settingsTab === "clients" && <ClientManagement />}{settingsTab === "sites" && <SiteManagement />}{settingsTab === "holidays" && <HolidayManagement />}{settingsTab === "config" && <ConfigManagement />}
+    {settingsTab === "labours" && <LabourManagement />}{settingsTab === "clients" && <ClientManagement />}{settingsTab === "sites" && <SiteManagement />}{settingsTab === "holidays" && <HolidayManagement />}{settingsTab === "incentives" && <IncentiveManagement />}{settingsTab === "managers" && <ManagerManagement />}{settingsTab === "config" && <ConfigManagement />}
   </div>);
 
   return (
     <LayoutShell title="Admin Dashboard">
       <div className="max-w-7xl mx-auto">
       <div className="mb-4 overflow-x-auto -mx-3 px-3"><nav className="flex gap-1 min-w-max border-b pb-0">
-        {[{ id: "daily", l: "📋 Daily" }, { id: "attendance", l: "👥 Attendance" }, { id: "reports", l: "📊 Reports" }, { id: "settings", l: "⚙️ Settings" }].map(t => (
+        {[{ id: "overview", l: "📈 Overview" }, { id: "daily", l: "📋 Daily" }, { id: "attendance", l: "👥 Attendance" }, { id: "reports", l: "📊 Reports" }, { id: "settings", l: "⚙️ Settings" }].map(t => (
           <button key={t.id} onClick={() => setActiveTab(t.id)} className={`px-4 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${activeTab === t.id ? "border-blue-600 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-700"}`}>{t.l}</button>
         ))}</nav></div>
+      {activeTab === "overview" && renderOverview()}
       {activeTab === "daily" && renderDaily()}
       {activeTab === "attendance" && renderPA()}
       {activeTab === "reports" && renderReports()}

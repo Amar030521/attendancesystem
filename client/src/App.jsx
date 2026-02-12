@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { LoginPage } from "./pages/LoginPage";
 import { LabourDashboard } from "./pages/LabourDashboard";
 import { AdminDashboard } from "./pages/AdminDashboard";
+import { ManagerDashboard } from "./pages/ManagerDashboard";
 import { getStoredUser } from "./api";
 
 function ProtectedRoute({ children, role }) {
@@ -36,8 +37,15 @@ export default function App() {
           </ProtectedRoute>
         }
       />
+      <Route
+        path="/manager"
+        element={
+          <ProtectedRoute role="manager">
+            <ManagerDashboard />
+          </ProtectedRoute>
+        }
+      />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }
-
