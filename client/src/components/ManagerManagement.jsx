@@ -6,7 +6,7 @@ export function ManagerManagement() {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState(null);
-  const [form, setForm] = useState({ username: "", name: "", pin: "", phone: "" });
+  const [form, setForm] = useState({ id: "", username: "", name: "", pin: "", phone: "" });
   const [saving, setSaving] = useState(false);
   const [createdPin, setCreatedPin] = useState(null);
 
@@ -18,8 +18,8 @@ export function ManagerManagement() {
     finally { setLoading(false); }
   }
 
-  function openAdd() { setEditId(null); setForm({ username: "", name: "", pin: "", phone: "" }); setCreatedPin(null); setShowForm(true); }
-  function openEdit(m) { setEditId(m.id); setForm({ username: m.username, name: m.name, pin: "", phone: m.phone || "" }); setCreatedPin(null); setShowForm(true); }
+  function openAdd() { setEditId(null); setForm({ id: "", username: "", name: "", pin: "", phone: "" }); setCreatedPin(null); setShowForm(true); }
+  function openEdit(m) { setEditId(m.id); setForm({ id: "", username: m.username, name: m.name, pin: "", phone: m.phone || "" }); setCreatedPin(null); setShowForm(true); }
 
   async function handleSave() {
     if (!editId && (!form.username || !form.name || !form.pin)) return alert("Username, name, and PIN required");
@@ -32,7 +32,9 @@ export function ManagerManagement() {
         await api.put(`/admin/managers/${editId}`, body);
         setShowForm(false);
       } else {
-        const { data } = await api.post("/admin/managers", form);
+        const payload = { username: form.username, name: form.name, pin: form.pin, phone: form.phone };
+        if (form.id) payload.id = Number(form.id);
+        const { data } = await api.post("/admin/managers", payload);
         setCreatedPin(data.pin);
       }
       await load();
@@ -74,6 +76,7 @@ export function ManagerManagement() {
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-bold text-gray-900">{m.name}</span>
                     <span className="text-xs text-gray-400">@{m.username}</span>
+                    <span className="text-xs text-gray-400">ID:{m.id}</span>
                     {m.status !== "active" && <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full">Inactive</span>}
                   </div>
                   {m.phone && <div className="text-xs text-gray-500 mt-0.5">{m.phone}</div>}
@@ -108,6 +111,12 @@ export function ManagerManagement() {
                 </div>
               ) : (
                 <>
+                  {!editId && (
+                    <div>
+                      <label className="block text-sm font-medium mb-1">ID <span className="text-xs text-gray-400">(optional, auto-generated if empty)</span></label>
+                      <input value={form.id} onChange={e => setForm(f => ({ ...f, id: e.target.value.replace(/\D/g, "") }))} className="w-full px-3 py-2.5 border rounded-xl text-sm" placeholder="e.g. 50 (leave empty for auto)" type="text" />
+                    </div>
+                  )}
                   {!editId && (
                     <div>
                       <label className="block text-sm font-medium mb-1">Username <span className="text-red-500">*</span></label>

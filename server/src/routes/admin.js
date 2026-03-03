@@ -517,21 +517,36 @@ router.get("/managers", async (req, res) => {
 
 router.post("/managers", async (req, res) => {
   try {
-    const { username, name, pin, phone } = req.body;
+    const { username, name, pin, phone, id: customId } = req.body;
     if (!username || !name || !pin) return res.status(400).json({ message: "username, name, and pin required" });
     if (!/^\d{4}$/.test(String(pin))) return res.status(400).json({ message: "PIN must be 4 digits" });
     const { data: existing } = await supabase.from("users").select("id").eq("username", username).maybeSingle();
     if (existing) return res.status(400).json({ message: "Username already taken" });
-    // Generate manager ID in 100-999 range (labours use 1000+)
-    const { data: maxMgr } = await supabase.from("users").select("id").eq("role", "manager").order("id", { ascending: false }).limit(1).maybeSingle();
-    const mgrId = (maxMgr?.id && maxMgr.id >= 100 && maxMgr.id < 1000) ? maxMgr.id + 1 : 100;
+    // Use custom ID if provided, otherwise auto-generate in 100-999 range
+    let mgrId;
+    if (customId) {
+      mgrId = Number(customId);
+      const { data: idTaken } = await supabase.from("users").select("id").eq("id", mgrId).maybeSingle();
+      if (idTaken) return res.status(400).json({ message: `ID ${mgrId} already exists. Choose a different one.` });
+    } else {
+      // Find a free ID by checking ALL users, not just managers
+      let candidate = 100;
+      while (candidate < 1000) {
+        const { data: taken } = await supabase.from("users").select("id").eq("id", candidate).maybeSingle();
+        if (!taken) break;
+        candidate++;
+      }
+      if (candidate >= 1000) return res.status(400).json({ message: "No free manager IDs (100-999)" });
+      mgrId = candidate;
+    }
     const hashed = await bcrypt.hash(String(pin), 10);
     const { data, error } = await supabase.from("users").insert({
       id: mgrId, username, name, role: "manager", pin: hashed, phone: phone || null, status: "active",
+      daily_wage: 0, designation: null, passport_id: null, date_of_joining: null,
     }).select().single();
     if (error) throw error;
     res.status(201).json({ ...data, pin: String(pin) });
-  } catch (err) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
+  } catch (err) { console.error("Manager create error:", err); res.status(500).json({ message: err.message || "Internal server error" }); }
 });
 
 router.put("/managers/:id", async (req, res) => {
