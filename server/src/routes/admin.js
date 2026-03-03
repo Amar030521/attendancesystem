@@ -522,9 +522,12 @@ router.post("/managers", async (req, res) => {
     if (!/^\d{4}$/.test(String(pin))) return res.status(400).json({ message: "PIN must be 4 digits" });
     const { data: existing } = await supabase.from("users").select("id").eq("username", username).maybeSingle();
     if (existing) return res.status(400).json({ message: "Username already taken" });
+    // Generate manager ID in 100-999 range (labours use 1000+)
+    const { data: maxMgr } = await supabase.from("users").select("id").eq("role", "manager").order("id", { ascending: false }).limit(1).maybeSingle();
+    const mgrId = (maxMgr?.id && maxMgr.id >= 100 && maxMgr.id < 1000) ? maxMgr.id + 1 : 100;
     const hashed = await bcrypt.hash(String(pin), 10);
     const { data, error } = await supabase.from("users").insert({
-      username, name, role: "manager", pin: hashed, phone: phone || null, status: "active",
+      id: mgrId, username, name, role: "manager", pin: hashed, phone: phone || null, status: "active",
     }).select().single();
     if (error) throw error;
     res.status(201).json({ ...data, pin: String(pin) });
