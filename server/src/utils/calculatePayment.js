@@ -60,12 +60,13 @@ function calculatePayment(dailyWage, startTime, endTime, date, holidays, config,
     totalPay = fixedPay + overtimeComponent;
   } else {
     // Note 2: Regular day
-    if (hoursWorked <= standardHours) {
-      regularPay = hoursWorked * standardRate;
-      otPay = 0;
-    } else {
-      regularPay = standardHours * standardRate;
+    // Minimum full-day pay: even if labour works less than standard hours,
+    // they get paid for the full standard hours (client pays for the day)
+    regularPay = standardHours * standardRate;
+    if (hoursWorked > standardHours) {
       otPay = (hoursWorked - standardHours) * overtimeRate;
+    } else {
+      otPay = 0;
     }
     totalPay = regularPay + otPay;
   }

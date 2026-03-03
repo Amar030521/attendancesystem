@@ -520,7 +520,7 @@ router.post("/managers", async (req, res) => {
     const { username, name, pin, phone } = req.body;
     if (!username || !name || !pin) return res.status(400).json({ message: "username, name, and pin required" });
     if (!/^\d{4}$/.test(String(pin))) return res.status(400).json({ message: "PIN must be 4 digits" });
-    const { data: existing } = await supabase.from("users").select("id").eq("username", username).single();
+    const { data: existing } = await supabase.from("users").select("id").eq("username", username).maybeSingle();
     if (existing) return res.status(400).json({ message: "Username already taken" });
     const hashed = await bcrypt.hash(String(pin), 10);
     const { data, error } = await supabase.from("users").insert({
