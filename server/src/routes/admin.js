@@ -517,28 +517,19 @@ router.get("/managers", async (req, res) => {
 
 router.post("/managers", async (req, res) => {
   try {
-    const { username, name, pin, phone, id: customId } = req.body;
-    if (!username || !name || !pin) return res.status(400).json({ message: "username, name, and pin required" });
+    const { name, pin, phone } = req.body;
+    if (!name || !pin) return res.status(400).json({ message: "Name and PIN required" });
     if (!/^\d{4}$/.test(String(pin))) return res.status(400).json({ message: "PIN must be 4 digits" });
-    const { data: existing } = await supabase.from("users").select("id").eq("username", username).maybeSingle();
-    if (existing) return res.status(400).json({ message: "Username already taken" });
-    // Use custom ID if provided, otherwise auto-generate in 100-999 range
-    let mgrId;
-    if (customId) {
-      mgrId = Number(customId);
-      const { data: idTaken } = await supabase.from("users").select("id").eq("id", mgrId).maybeSingle();
-      if (idTaken) return res.status(400).json({ message: `ID ${mgrId} already exists. Choose a different one.` });
-    } else {
-      // Find a free ID by checking ALL users, not just managers
-      let candidate = 100;
-      while (candidate < 1000) {
-        const { data: taken } = await supabase.from("users").select("id").eq("id", candidate).maybeSingle();
-        if (!taken) break;
-        candidate++;
-      }
-      if (candidate >= 1000) return res.status(400).json({ message: "No free manager IDs (100-999)" });
-      mgrId = candidate;
+    // Auto-generate unique ID (5000-9999 range for managers, labours use 1000+)
+    const { data: allIds } = await supabase.from("users").select("id");
+    const usedIds = new Set((allIds || []).map(r => r.id));
+    let mgrId = null;
+    for (let i = 5000; i <= 9999; i++) {
+      if (!usedIds.has(i)) { mgrId = i; break; }
     }
+    if (!mgrId) return res.status(400).json({ message: "No free IDs available" });
+    // Auto-generate username from name (lowercase, no spaces) + id
+    const username = name.toLowerCase().replace(/[^a-z0-9]/g, "") + mgrId;
     const hashed = await bcrypt.hash(String(pin), 10);
     const { data, error } = await supabase.from("users").insert({
       id: mgrId, username, name, role: "manager", pin: hashed, phone: phone || null, status: "active",
