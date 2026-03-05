@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useMemo } from "react";
 import { LoadingSpinner } from "../components/LoadingSpinner";
+import { Pagination } from "../components/Pagination";
 import { LabourManagement } from "../components/LabourManagement";
 import { ClientManagement } from "../components/ClientManagement";
 import { SiteManagement } from "../components/SiteManagement";
@@ -84,6 +85,9 @@ export function AdminDashboard() {
   const [markModal, setMarkModal] = useState(null);
   const [markForm, setMarkForm] = useState({ client_id: "", site_id: "", start_time: "", end_time: "" });
   const [markSaving, setMarkSaving] = useState(false);
+  const [paSearch, setPaSearch] = useState("");
+  const [paPage, setPaPage] = useState(1);
+  const PA_PAGE_SIZE = 15;
 
   // REPORTS
   const [reportMonth, setReportMonth] = useState(currentMonth());
@@ -120,6 +124,9 @@ export function AdminDashboard() {
   const markSites = sites.filter(s => String(s.client_id) === String(markForm.client_id));
   const reportClientSites = useMemo(() => selectedClient ? reportSites.filter(s => String(s.client_id) === String(selectedClient)) : [], [selectedClient, reportSites]);
   const paFilteredLabours = useMemo(() => { if (!paData) return []; return paFilter === "all" ? paData.labours : paData.labours.filter(l => l.status === paFilter); }, [paData, paFilter]);
+  const paSearched = useMemo(() => { if (!paSearch.trim()) return paFilteredLabours; const s = paSearch.toLowerCase(); return paFilteredLabours.filter(l => l.name.toLowerCase().includes(s) || String(l.labour_id).includes(s)); }, [paFilteredLabours, paSearch]);
+  const paTotalPages = Math.ceil(paSearched.length / PA_PAGE_SIZE);
+  const paPaged = paSearched.slice((paPage - 1) * PA_PAGE_SIZE, paPage * PA_PAGE_SIZE);
 
   // ─── DAILY HANDLERS ───
   async function handleVerifyRow(id) { try { setVerifying(true); await api.put(`/admin/attendance/${id}/verify`); await loadDaily(); } catch (e) { console.error(e); } finally { setVerifying(false); } }
@@ -367,10 +374,13 @@ export function AdminDashboard() {
 
         {paData.cutoffNote && <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 text-sm text-amber-800">⚠️ {paData.cutoffNote}</div>}
 
+        {/* Search */}
+        <input type="text" placeholder="Search by name or ID..." value={paSearch} onChange={e => { setPaSearch(e.target.value); setPaPage(1); }} className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+
         {/* Labour list */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
           {/* Mobile cards */}
-          <div className="md:hidden divide-y divide-gray-100">{paFilteredLabours.map(l => (
+          <div className="md:hidden divide-y divide-gray-100">{paPaged.map(l => (
             <div key={l.labour_id} className={`p-3 border-l-4 ${l.status === "present" ? "border-green-500" : l.status === "absent" ? "border-red-400" : "border-amber-400"}`}>
               <div className="flex items-center justify-between">
                 <div className="flex-1 min-w-0">
@@ -391,7 +401,7 @@ export function AdminDashboard() {
             <th className="px-3 py-2.5 text-center text-xs font-medium text-gray-500 uppercase">Status</th>
             <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">Details</th>
             <th className="px-3 py-2.5 text-center text-xs font-medium text-gray-500 uppercase">Action</th>
-          </tr></thead><tbody className="divide-y divide-gray-100">{paFilteredLabours.map(l => (
+          </tr></thead><tbody className="divide-y divide-gray-100">{paPaged.map(l => (
             <tr key={l.labour_id} className="hover:bg-gray-50">
               <td className="px-3 py-2.5 font-medium">{l.labour_id}</td>
               <td className="px-3 py-2.5">{l.name}</td>
@@ -408,6 +418,9 @@ export function AdminDashboard() {
           ))}</tbody></table>
         </div>
       </>)}
+
+      {/* Pagination */}
+      <Pagination currentPage={paPage} totalPages={paTotalPages} onPageChange={setPaPage} totalItems={paSearched.length} pageSize={PA_PAGE_SIZE} />
 
       {/* Mark Present Modal */}
       {markModal && (

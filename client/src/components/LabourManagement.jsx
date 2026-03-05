@@ -1,6 +1,9 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { api } from "../api";
 import { LoadingSpinner } from "./LoadingSpinner";
+import { Pagination } from "./Pagination";
+
+const PAGE_SIZE = 15;
 
 export function LabourManagement() {
   const [labours, setLabours] = useState([]);
@@ -12,12 +15,13 @@ export function LabourManagement() {
   const [searchTerm, setSearchTerm] = useState("");
   const [importing, setImporting] = useState(false);
   const [knownPins, setKnownPins] = useState({});
-  const [detailLabour, setDetailLabour] = useState(null); // mobile detail popup
+  const [detailLabour, setDetailLabour] = useState(null);
+  const [page, setPage] = useState(1);
 
   useEffect(() => { loadLabours(); }, []);
 
   async function loadLabours() {
-    try { setLoading(true); const res = await api.get("/admin/labours"); setLabours(res.data); }
+    try { setLoading(true); setLabours((await api.get("/admin/labours")).data); }
     catch (err) { console.error(err); alert("Failed to load labours"); }
     finally { setLoading(false); }
   }
@@ -56,22 +60,27 @@ export function LabourManagement() {
       const newPins = {}; let message = `Imported ${res.data.createdCount} labours!\n\n`;
       res.data.labours.forEach(l => { newPins[l.id] = l.pin; message += `ID: ${l.id} | ${l.name} | PIN: ${l.pin}\n`; });
       setKnownPins(prev => ({ ...prev, ...newPins })); alert(message); await loadLabours();
-    } catch (err) { alert(err.response?.data?.message || "Failed to import CSV"); }
+    } catch (err) { alert(err.response?.data?.message || "Failed to import"); }
     finally { setImporting(false); e.target.value = ""; }
   }
 
-  const filteredLabours = labours.filter(l =>
+  const filteredLabours = useMemo(() => labours.filter(l =>
     l.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     String(l.id).includes(searchTerm) ||
     (l.passport_id && l.passport_id.toLowerCase().includes(searchTerm.toLowerCase())) ||
     (l.designation && l.designation.toLowerCase().includes(searchTerm.toLowerCase()))
-  );
+  ), [labours, searchTerm]);
+
+  // Reset to page 1 when search changes
+  useEffect(() => { setPage(1); }, [searchTerm]);
+
+  const totalPages = Math.ceil(filteredLabours.length / PAGE_SIZE);
+  const pagedLabours = filteredLabours.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   const fmtDate = (d) => d ? new Date(d).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "-";
 
   return (
     <div className="space-y-4">
-      {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div><h2 className="text-lg font-semibold">Labour Management</h2><p className="text-sm text-gray-500">Manage labour employees and their details</p></div>
         <div className="flex gap-2">
@@ -89,22 +98,15 @@ export function LabourManagement() {
       </div>
 
       {loading ? <LoadingSpinner label="Loading labours..." /> : (<>
-        {/* ═══ MOBILE CARDS ═══ */}
+        {/* MOBILE CARDS */}
         <div className="md:hidden space-y-2">
-          {filteredLabours.length === 0 ? <p className="text-center text-gray-400 py-8">No labours found</p> :
-            filteredLabours.map(l => (
-              <button key={l.id} onClick={() => setDetailLabour(l)} className="w-full text-left bg-white rounded-xl border border-gray-100 shadow-sm p-3.5 active:bg-gray-50 transition-colors">
+          {pagedLabours.length === 0 ? <p className="text-center text-gray-400 py-8">No labours found</p> :
+            pagedLabours.map(l => (
+              <button key={l.id} onClick={() => setDetailLabour(l)} className="w-full text-left bg-white rounded-xl border border-gray-100 shadow-sm p-3.5 active:bg-gray-50">
                 <div className="flex items-center justify-between">
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-bold text-gray-900 truncate">{l.name}</span>
-                      <span className="text-[10px] text-gray-400 shrink-0">#{l.id}</span>
-                    </div>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <span className="text-xs text-gray-500">{l.designation || "No designation"}</span>
-                      <span className="text-xs text-gray-300">•</span>
-                      <span className="text-xs font-medium text-gray-600">AED {Number(l.daily_wage).toLocaleString()}/mo</span>
-                    </div>
+                    <div className="flex items-center gap-2"><span className="text-sm font-bold text-gray-900 truncate">{l.name}</span><span className="text-[10px] text-gray-400 shrink-0">#{l.id}</span></div>
+                    <div className="flex items-center gap-2 mt-0.5"><span className="text-xs text-gray-500">{l.designation || "No designation"}</span><span className="text-xs text-gray-300">•</span><span className="text-xs font-medium text-gray-600">AED {Number(l.daily_wage).toLocaleString()}/mo</span></div>
                   </div>
                   <div className="flex items-center gap-2 ml-2 shrink-0">
                     <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${l.status === "active" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>{l.status}</span>
@@ -114,9 +116,10 @@ export function LabourManagement() {
               </button>
             ))
           }
+          <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} totalItems={filteredLabours.length} pageSize={PAGE_SIZE} />
         </div>
 
-        {/* ═══ DESKTOP TABLE ═══ */}
+        {/* DESKTOP TABLE */}
         <div className="hidden md:block overflow-x-auto bg-white rounded-xl border border-gray-100 shadow-sm">
           <table className="min-w-full text-sm">
             <thead className="bg-gray-50"><tr>
@@ -132,8 +135,8 @@ export function LabourManagement() {
               <th className="px-3 py-3 text-right text-xs font-semibold text-gray-600">Actions</th>
             </tr></thead>
             <tbody className="divide-y divide-gray-100">
-              {filteredLabours.length === 0 ? <tr><td colSpan="10" className="px-4 py-8 text-center text-gray-400">No labours found</td></tr> :
-                filteredLabours.map(l => (
+              {pagedLabours.length === 0 ? <tr><td colSpan="10" className="px-4 py-8 text-center text-gray-400">No labours found</td></tr> :
+                pagedLabours.map(l => (
                   <tr key={l.id} className="hover:bg-gray-50/50">
                     <td className="px-3 py-3 font-medium">{l.id}</td>
                     <td className="px-3 py-3">{l.name}</td>
@@ -155,50 +158,33 @@ export function LabourManagement() {
               }
             </tbody>
           </table>
+          <div className="px-4 py-2 border-t border-gray-100">
+            <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} totalItems={filteredLabours.length} pageSize={PAGE_SIZE} />
+          </div>
         </div>
       </>)}
 
-      {/* ═══ MOBILE DETAIL POPUP ═══ */}
+      {/* MOBILE DETAIL POPUP */}
       {detailLabour && (
         <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50" onClick={() => setDetailLabour(null)}>
           <div className="bg-white w-full sm:max-w-md sm:rounded-xl rounded-t-2xl shadow-2xl max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-            {/* Header */}
             <div className="sticky top-0 bg-white px-5 pt-4 pb-3 border-b border-gray-100 flex items-center justify-between">
-              <div>
-                <h3 className="text-base font-bold text-gray-900">{detailLabour.name}</h3>
-                <p className="text-xs text-gray-400">ID: {detailLabour.id}</p>
-              </div>
+              <div><h3 className="text-base font-bold text-gray-900">{detailLabour.name}</h3><p className="text-xs text-gray-400">ID: {detailLabour.id}</p></div>
               <div className="flex items-center gap-2">
                 <span className={`text-xs px-2.5 py-1 rounded-full font-semibold ${detailLabour.status === "active" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>{detailLabour.status}</span>
                 <button onClick={() => setDetailLabour(null)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400"><svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
               </div>
             </div>
-            {/* Details */}
             <div className="px-5 py-4 space-y-3">
-              {[
-                { label: "Designation", value: detailLabour.designation || "-" },
-                { label: "Monthly Wages", value: `AED ${Number(detailLabour.daily_wage).toLocaleString()}` },
-                { label: "Phone", value: detailLabour.phone || "-" },
-                { label: "Passport ID", value: detailLabour.passport_id || "-" },
-                { label: "Date of Joining", value: fmtDate(detailLabour.date_of_joining) },
-                { label: "PIN", value: knownPins[detailLabour.id] || "••••" },
-              ].map((row, i) => (
-                <div key={i} className="flex items-center justify-between py-1.5 border-b border-gray-50 last:border-0">
-                  <span className="text-xs text-gray-500 font-medium">{row.label}</span>
-                  <span className="text-sm font-medium text-gray-900">{row.value}</span>
-                </div>
+              {[{ label: "Designation", value: detailLabour.designation || "-" },{ label: "Monthly Wages", value: `AED ${Number(detailLabour.daily_wage).toLocaleString()}` },{ label: "Phone", value: detailLabour.phone || "-" },{ label: "Passport ID", value: detailLabour.passport_id || "-" },{ label: "Date of Joining", value: fmtDate(detailLabour.date_of_joining) },{ label: "PIN", value: knownPins[detailLabour.id] || "••••" }].map((row, i) => (
+                <div key={i} className="flex items-center justify-between py-1.5 border-b border-gray-50 last:border-0"><span className="text-xs text-gray-500 font-medium">{row.label}</span><span className="text-sm font-medium text-gray-900">{row.value}</span></div>
               ))}
             </div>
-            {/* Actions */}
             <div className="px-5 pb-5 pt-1 space-y-2">
-              <button onClick={() => openEditModal(detailLabour)} className="w-full py-2.5 bg-blue-600 text-white rounded-xl text-sm font-semibold hover:bg-blue-700">Edit Details</button>
-              <button onClick={() => handleResetPin(detailLabour.id, detailLabour.name)} className="w-full py-2.5 bg-amber-500 text-white rounded-xl text-sm font-semibold hover:bg-amber-600">Reset PIN</button>
+              <button onClick={() => openEditModal(detailLabour)} className="w-full py-2.5 bg-blue-600 text-white rounded-xl text-sm font-semibold">Edit Details</button>
+              <button onClick={() => handleResetPin(detailLabour.id, detailLabour.name)} className="w-full py-2.5 bg-amber-500 text-white rounded-xl text-sm font-semibold">Reset PIN</button>
               <div className="grid grid-cols-2 gap-2">
-                {detailLabour.status === "active" ? (
-                  <button onClick={() => handleDeactivate(detailLabour.id, detailLabour.name)} className="py-2.5 bg-orange-100 text-orange-700 rounded-xl text-sm font-semibold">Deactivate</button>
-                ) : (
-                  <button onClick={() => handleActivate(detailLabour.id, detailLabour.name)} className="py-2.5 bg-green-100 text-green-700 rounded-xl text-sm font-semibold">Activate</button>
-                )}
+                {detailLabour.status === "active" ? <button onClick={() => handleDeactivate(detailLabour.id, detailLabour.name)} className="py-2.5 bg-orange-100 text-orange-700 rounded-xl text-sm font-semibold">Deactivate</button> : <button onClick={() => handleActivate(detailLabour.id, detailLabour.name)} className="py-2.5 bg-green-100 text-green-700 rounded-xl text-sm font-semibold">Activate</button>}
                 <button onClick={() => handlePermanentDelete(detailLabour.id, detailLabour.name)} className="py-2.5 bg-red-100 text-red-700 rounded-xl text-sm font-semibold">Delete</button>
               </div>
             </div>
@@ -206,7 +192,7 @@ export function LabourManagement() {
         </div>
       )}
 
-      {/* ═══ ADD/EDIT MODAL ═══ */}
+      {/* ADD/EDIT MODAL */}
       {showModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
@@ -214,9 +200,9 @@ export function LabourManagement() {
             <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4">
               <div><label className="block text-sm font-medium text-gray-700 mb-1">Name <span className="text-red-500">*</span></label><input type="text" required value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} className="w-full px-3 py-2.5 border rounded-xl text-sm" placeholder="Enter labour name" /></div>
               <div><label className="block text-sm font-medium text-gray-700 mb-1">Monthly Wages (AED) <span className="text-red-500">*</span></label><input type="number" required min="1" value={formData.daily_wage} onChange={e => setFormData({ ...formData, daily_wage: e.target.value })} className="w-full px-3 py-2.5 border rounded-xl text-sm" placeholder="e.g. 1200" /></div>
-              <div><label className="block text-sm font-medium text-gray-700 mb-1">Phone</label><input type="tel" value={formData.phone} onChange={e => setFormData({ ...formData, phone: e.target.value })} className="w-full px-3 py-2.5 border rounded-xl text-sm" placeholder="+971 50 123 4567" /></div>
-              <div><label className="block text-sm font-medium text-gray-700 mb-1">Passport ID</label><input type="text" value={formData.passport_id} onChange={e => setFormData({ ...formData, passport_id: e.target.value })} className="w-full px-3 py-2.5 border rounded-xl text-sm" placeholder="e.g. AB1234567" /></div>
-              <div><label className="block text-sm font-medium text-gray-700 mb-1">Designation</label><input type="text" value={formData.designation} onChange={e => setFormData({ ...formData, designation: e.target.value })} className="w-full px-3 py-2.5 border rounded-xl text-sm" placeholder="e.g. Helper, Carpenter" /></div>
+              <div><label className="block text-sm font-medium text-gray-700 mb-1">Phone</label><input type="tel" value={formData.phone} onChange={e => setFormData({ ...formData, phone: e.target.value })} className="w-full px-3 py-2.5 border rounded-xl text-sm" /></div>
+              <div><label className="block text-sm font-medium text-gray-700 mb-1">Passport ID</label><input type="text" value={formData.passport_id} onChange={e => setFormData({ ...formData, passport_id: e.target.value })} className="w-full px-3 py-2.5 border rounded-xl text-sm" /></div>
+              <div><label className="block text-sm font-medium text-gray-700 mb-1">Designation</label><input type="text" value={formData.designation} onChange={e => setFormData({ ...formData, designation: e.target.value })} className="w-full px-3 py-2.5 border rounded-xl text-sm" /></div>
               <div><label className="block text-sm font-medium text-gray-700 mb-1">Date of Joining</label><input type="date" value={formData.date_of_joining} onChange={e => setFormData({ ...formData, date_of_joining: e.target.value })} className="w-full px-3 py-2.5 border rounded-xl text-sm" /></div>
               {modalMode === "edit" && currentLabour && (<div><label className="block text-sm font-medium text-gray-700 mb-1">Status</label><select value={formData.status || currentLabour.status} onChange={e => setFormData({ ...formData, status: e.target.value })} className="w-full px-3 py-2.5 border rounded-xl text-sm"><option value="active">Active</option><option value="inactive">Inactive</option></select></div>)}
               <div className="flex gap-3 pt-2"><button type="button" onClick={closeModal} className="flex-1 px-4 py-2.5 border rounded-xl text-sm font-medium">Cancel</button><button type="submit" className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-semibold">{modalMode === "add" ? "Add Labour" : "Save Changes"}</button></div>
