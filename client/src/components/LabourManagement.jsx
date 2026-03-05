@@ -75,7 +75,7 @@ export function LabourManagement() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div><h2 className="text-lg font-semibold">Labour Management</h2><p className="text-sm text-gray-500">Manage labour employees and their details</p></div>
         <div className="flex gap-2">
-          <label className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium cursor-pointer hover:bg-blue-700">📁 Import CSV<input type="file" accept=".csv" onChange={handleCSVImport} disabled={importing} className="hidden" /></label>
+          <label className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium cursor-pointer hover:bg-blue-700">📁 Import<input type="file" accept=".csv,.xlsx,.xls" onChange={handleCSVImport} disabled={importing} className="hidden" /></label>
           <button onClick={openAddModal} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700">+ Add Labour</button>
         </div>
       </div>
@@ -83,9 +83,9 @@ export function LabourManagement() {
       <input type="text" placeholder="Search by name, ID, or designation..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
 
       <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-sm">
-        <p className="font-medium text-blue-900">CSV Import Format:</p>
-        <code className="text-xs bg-blue-100 px-2 py-1 rounded mt-1 inline-block">name,daily_wage,phone,passport_id,designation,date_of_joining</code>
-        <p className="text-xs text-blue-700 mt-1">System will auto-generate IDs and PINs. daily_wage = monthly wages.</p>
+        <p className="font-medium text-blue-900">Import Format (CSV or Excel):</p>
+        <code className="text-xs bg-blue-100 px-2 py-1 rounded mt-1 inline-block">name, daily_wage, phone, passport_id, designation, date_of_joining</code>
+        <p className="text-xs text-blue-700 mt-1">Supports .csv and .xlsx files. Wages can have commas (e.g. 1,200). IDs and PINs auto-generated.</p>
       </div>
 
       {loading ? <LoadingSpinner label="Loading labours..." /> : (<>

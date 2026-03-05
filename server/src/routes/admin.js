@@ -1,6 +1,7 @@
 const express = require("express");
 const multer = require("multer");
 const csvParse = require("csv-parse/sync");
+const XLSX = require("xlsx");
 const bcrypt = require("bcryptjs");
 const { authMiddleware, requireRole } = require("../middleware/auth");
 const { supabase } = require("../db");
@@ -395,24 +396,58 @@ router.post("/labours/:id/reset-pin", async (req, res) => {
 
 router.post("/labours/import", upload.single("file"), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ message: "CSV required" });
-    const recs = csvParse.parse(req.file.buffer.toString("utf-8"), { columns: true, trim: true, skip_empty_lines: true });
+    if (!req.file) return res.status(400).json({ message: "File required (CSV or Excel)" });
+    const ext = (req.file.originalname || "").toLowerCase();
+    let recs = [];
+    if (ext.endsWith(".xlsx") || ext.endsWith(".xls")) {
+      // Parse Excel
+      const wb = XLSX.read(req.file.buffer, { type: "buffer", cellDates: true });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      recs = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+    } else {
+      // Parse CSV
+      recs = csvParse.parse(req.file.buffer.toString("utf-8"), { columns: true, trim: true, skip_empty_lines: true });
+    }
+    if (!recs.length) return res.status(400).json({ message: "No data rows found in file" });
+    // Helper: parse wage value - handles "1,200.00", "1200", 1200, etc.
+    function parseWage(v) {
+      if (typeof v === "number") return v;
+      if (!v) return 0;
+      return Number(String(v).replace(/[^0-9.]/g, "")) || 0;
+    }
+    // Helper: parse date - handles Date objects from Excel and strings
+    function parseDate(v) {
+      if (!v) return null;
+      if (v instanceof Date) return v.toISOString().slice(0, 10);
+      const s = String(v).trim();
+      if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+      const d = new Date(s);
+      return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+    }
     const created = [];
+    const skipped = [];
     for (const row of recs) {
-      const name = row.Name || row.name; const dw = Number(row.Daily_Wage || row.daily_wage || row.monthly_wage || 0);
-      if (!name || !dw || dw <= 0) continue;
+      const name = (row.Name || row.name || row.NAME || "").trim();
+      const dw = parseWage(row.Daily_Wage || row.daily_wage || row.monthly_wage || row["Monthly Wages"] || row["monthly wages"] || row.Salary || row.salary || 0);
+      if (!name || dw <= 0) { skipped.push(name || "(empty)"); continue; }
       const { data: maxRow } = await supabase.from("users").select("id").gte("id", 1000).order("id", { ascending: false }).limit(1).maybeSingle();
       const nextId = (maxRow?.id || 1000) + 1;
       const pin = generateRandomPin();
       await supabase.from("users").insert({
         id: nextId, username: String(nextId), name, role: "labour", pin: await bcrypt.hash(pin, 10),
-        daily_wage: dw, phone: row.Phone || row.phone || null, designation: row.Designation || row.designation || null,
-        passport_id: row.Passport_ID || row.passport_id || null, date_of_joining: row.Date_of_Joining || row.date_of_joining || null, status: "active",
+        daily_wage: dw,
+        phone: (row.Phone || row.phone || row.PHONE || "").trim() || null,
+        designation: (row.Designation || row.designation || row.DESIGNATION || "").trim() || null,
+        passport_id: (row.Passport_ID || row.passport_id || row["Passport ID"] || row.passport || "").trim() || null,
+        date_of_joining: parseDate(row.Date_of_Joining || row.date_of_joining || row["Joining Date"] || row["Date of Joining"]),
+        status: "active",
       });
       created.push({ id: nextId, name, pin });
     }
-    return res.json({ createdCount: created.length, labours: created });
-  } catch (err) { console.error(err); return res.status(500).json({ message: "Internal server error" }); }
+    let msg = `Imported ${created.length} labours!`;
+    if (skipped.length) msg += ` Skipped ${skipped.length}: ${skipped.slice(0, 5).join(", ")}${skipped.length > 5 ? "..." : ""}`;
+    return res.json({ createdCount: created.length, labours: created, skippedCount: skipped.length, message: msg });
+  } catch (err) { console.error("Import error:", err); return res.status(500).json({ message: err.message || "Import failed" }); }
 });
 
 // ===== Clients =====
