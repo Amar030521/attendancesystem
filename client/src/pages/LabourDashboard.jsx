@@ -217,7 +217,7 @@ export function LabourDashboard() {
             <div className="flex items-center gap-3">
               <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center text-2xl">🔥</div>
               <div>
-                <p className="text-xs font-medium opacity-90">Extra OT Earned!</p>
+                <p className="text-xs font-medium opacity-90">Overtime — Extra Income Earned</p>
                 <p className="text-2xl font-black">{formatCurrency(otPay)}</p>
               </div>
             </div>
@@ -251,6 +251,23 @@ export function LabourDashboard() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* Quick Check-In Prompt — FIRST so they see it immediately */}
+        {needsCheckin && (
+          <button onClick={() => setActiveTab("checkin")}
+            className="w-full bg-gradient-to-r from-green-500 to-green-600 text-white rounded-2xl p-4 shadow-lg text-left active:scale-[0.98] transition-transform">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="font-bold text-base">📋 Mark Attendance</div>
+                <div className="text-xs opacity-90 mt-0.5">
+                  {canCheckToday && canCheckYesterday ? "Today & Yesterday available" :
+                   canCheckToday ? "Submit for today" : "Submit for yesterday"}
+                </div>
+              </div>
+              <div className="text-3xl">→</div>
+            </div>
+          </button>
         )}
 
         {/* Yesterday + Today quick status */}
@@ -303,23 +320,6 @@ export function LabourDashboard() {
               </div>
             )}
           </div>
-        )}
-
-        {/* Quick Check-In Prompt */}
-        {needsCheckin && (
-          <button onClick={() => setActiveTab("checkin")}
-            className="w-full bg-gradient-to-r from-green-500 to-green-600 text-white rounded-2xl p-4 shadow-lg text-left active:scale-[0.98] transition-transform">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="font-bold text-base">📋 Mark Attendance</div>
-                <div className="text-xs opacity-90 mt-0.5">
-                  {canCheckToday && canCheckYesterday ? "Today & Yesterday available" :
-                   canCheckToday ? "Submit for today" : "Submit for yesterday"}
-                </div>
-              </div>
-              <div className="text-3xl">→</div>
-            </div>
-          </button>
         )}
 
         {/* Sunday/Holiday info */}
