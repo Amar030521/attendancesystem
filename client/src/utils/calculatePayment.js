@@ -3,12 +3,8 @@ export function parseTimeToMinutes(timeStr) {
   return h * 60 + m;
 }
 
-// Payment calculation matching Excel formulas exactly:
-//
-// Standard Rate (G) = Total Salary / Days in Month / Standard Working Hours
-// OT Rate (H)       = IF designation is "helper" -> FIXED AED 3/hr, else FIXED AED 4/hr
-// Sunday Rate (I)   = OT Rate * 1.5
-//
+// OT Rate = Salary ÷ 30 ÷ 10
+// Sunday Rate = OT Rate × 1.5
 export function calculatePayment(dailyWage, startTime, endTime, date, holidays, config, designation) {
   if (!dailyWage || !startTime || !endTime || !date || !config) {
     return { hoursWorked: 0, regularPay: 0, otPay: 0, totalPay: 0, isSunday: false, isHoliday: false };
@@ -28,16 +24,11 @@ export function calculatePayment(dailyWage, startTime, endTime, date, holidays, 
   const d = new Date(date);
   const daysInMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
 
-  // Standard hourly rate: Salary / Days in Month / Standard Hours
   const standardRate = dailyWage / daysInMonth / standardHours;
 
-  // OT rate: FIXED by designation (Excel: =IF(D4="helper",3,4))
-  const isHelper = (designation || "").toLowerCase().trim() === "helper";
-  const helperOtRate = parseFloat(config.helper_ot_rate || "3");
-  const nonHelperOtRate = parseFloat(config.non_helper_ot_rate || "4");
-  const overtimeRate = isHelper ? helperOtRate : nonHelperOtRate;
+  // OT rate: Salary ÷ 30 ÷ 10 (fixed denominator)
+  const overtimeRate = dailyWage / 30 / 10;
 
-  // Sunday/Holiday rate: OT Rate * 1.5 (Excel: =H4*1.5)
   const sundayMultiplier = parseFloat(config.sunday_ot_multiplier || "1.5");
   const sundayHolidayRate = overtimeRate * sundayMultiplier;
 
@@ -55,7 +46,6 @@ export function calculatePayment(dailyWage, startTime, endTime, date, holidays, 
     otPay = overtimeComponent;
     totalPay = fixedPay + overtimeComponent;
   } else {
-    // Regular day: minimum full-day pay even if hours < standard
     regularPay = standardHours * standardRate;
     if (hoursWorked > standardHours) {
       otPay = (hoursWorked - standardHours) * overtimeRate;
@@ -73,4 +63,16 @@ export function calculatePayment(dailyWage, startTime, endTime, date, holidays, 
     isSunday,
     isHoliday,
   };
+}
+
+/**
+ * Calculate Sunday/Holiday auto-pay for days WITHOUT attendance.
+ */
+export function calculateSundayAutoPay(dailyWage, date, config) {
+  const d = new Date(date);
+  const daysInMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  const standardHours = parseFloat(config.regular_hours || "10");
+  const standardRate = dailyWage / daysInMonth / standardHours;
+  const basePay = standardHours * standardRate;
+  return Math.round(basePay * 100) / 100;
 }

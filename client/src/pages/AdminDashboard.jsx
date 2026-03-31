@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useMemo } from "react";
 import { LoadingSpinner } from "../components/LoadingSpinner";
 import { Pagination } from "../components/Pagination";
+import { Pagination } from "../components/Pagination";
 import { LabourManagement } from "../components/LabourManagement";
 import { ClientManagement } from "../components/ClientManagement";
 import { SiteManagement } from "../components/SiteManagement";
@@ -217,7 +218,7 @@ export function AdminDashboard() {
           {[
             { l: "Regular Pay", v: formatCurrency(s.totalRegularMonth), dot: "#3b82f6" },
             { l: "OT Pay", v: formatCurrency(s.totalOTMonth), dot: "#f59e0b" },
-            { l: "Avg/Entry", v: formatCurrency(s.avgDailyWage), dot: "#10b981" },
+            { l: "Advance Given", v: s.totalAdvancePayment > 0 ? formatCurrency(s.totalAdvancePayment) : "AED 0", dot: "#ef4444" },
             { l: "Work Days", v: s.uniqueWorkDays, dot: "#8b5cf6" },
           ].map((m, i) => (
             <div key={i} className="bg-white rounded-xl p-3 border border-gray-100 shadow-sm">

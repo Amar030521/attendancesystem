@@ -3,25 +3,27 @@ function parseTimeToMinutes(timeStr) {
   return h * 60 + m;
 }
 
-// Payment calculation matching Excel formulas exactly:
+// Payment calculation:
 //
-// Standard Rate (G) = Total Salary ÷ Days in Month ÷ Standard Working Hours
-// OT Rate (H)       = IF designation is "helper" → FIXED AED 3/hr, else FIXED AED 4/hr
-// Sunday Rate (I)   = OT Rate × 1.5
+// Standard Rate = Total Salary ÷ Days in Month ÷ Standard Working Hours
+// OT Rate       = Total Salary ÷ 30 ÷ 10  (fixed 30 days, 10 hours)
+// Sunday Rate   = OT Rate × 1.5
 //
-// Regular Day (Note 2):
-//   ≤ standard hours:  RegularPay = hours × StandardRate,  OTPay = 0
-//   > standard hours:  RegularPay = stdHours × StandardRate,  OTPay = (hours - stdHours) × OTRate
+// Regular Day:
+//   RegularPay = stdHours × StandardRate  (full day pay always)
+//   If hours > stdHours: OTPay = (hours - stdHours) × OTRate
 //
-// Sunday / Holiday (Note 3):
-//   FixedPay = stdHours × StandardRate  (always paid, even if 0 hours worked)
-//   OTPay    = workedHours × SundayRate
-//   Total    = FixedPay + OTPay
+// Sunday / Holiday (WITH attendance):
+//   RegularPay = stdHours × StandardRate  (base day pay)
+//   OTPay      = workedHours × SundayRate  (ALL worked hours are OT)
+//
+// Sunday / Holiday (WITHOUT attendance - auto-pay):
+//   RegularPay = stdHours × StandardRate  (base day pay)
+//   OTPay      = 0
 //
 function calculatePayment(dailyWage, startTime, endTime, date, holidays, config, designation) {
   const start = parseTimeToMinutes(startTime);
   let end = parseTimeToMinutes(endTime);
-  // Night shift support: if end <= start, worker crossed midnight
   if (end <= start) end += 24 * 60;
   const totalMinutes = end - start;
   const hoursWorked = totalMinutes / 60;
@@ -31,16 +33,11 @@ function calculatePayment(dailyWage, startTime, endTime, date, holidays, config,
   const d = new Date(date);
   const daysInMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
 
-  // Standard hourly rate: Salary ÷ Days in Month ÷ Standard Hours
   const standardRate = dailyWage / daysInMonth / standardHours;
 
-  // OT rate: FIXED by designation (Excel: =IF(D4="helper",3,4))
-  const isHelper = (designation || "").toLowerCase().trim() === "helper";
-  const helperOtRate = parseFloat(config.helper_ot_rate || "3");
-  const nonHelperOtRate = parseFloat(config.non_helper_ot_rate || "4");
-  const overtimeRate = isHelper ? helperOtRate : nonHelperOtRate;
+  // OT rate: Salary ÷ 30 ÷ 10 (fixed denominator)
+  const overtimeRate = dailyWage / 30 / 10;
 
-  // Sunday/Holiday rate: OT Rate × 1.5 (Excel: =H4*1.5)
   const sundayMultiplier = parseFloat(config.sunday_ot_multiplier || "1.5");
   const sundayHolidayRate = overtimeRate * sundayMultiplier;
 
@@ -52,16 +49,12 @@ function calculatePayment(dailyWage, startTime, endTime, date, holidays, config,
   let totalPay = 0;
 
   if (isSunday || isHoliday) {
-    // Note 3: Fixed 10h pay + all worked hours at Sunday rate
     const fixedPay = standardHours * standardRate;
     const overtimeComponent = hoursWorked * sundayHolidayRate;
     regularPay = fixedPay;
     otPay = overtimeComponent;
     totalPay = fixedPay + overtimeComponent;
   } else {
-    // Note 2: Regular day
-    // Minimum full-day pay: even if labour works less than standard hours,
-    // they get paid for the full standard hours (client pays for the day)
     regularPay = standardHours * standardRate;
     if (hoursWorked > standardHours) {
       otPay = (hoursWorked - standardHours) * overtimeRate;
@@ -81,4 +74,17 @@ function calculatePayment(dailyWage, startTime, endTime, date, holidays, config,
   };
 }
 
-module.exports = { calculatePayment };
+/**
+ * Calculate Sunday/Holiday auto-pay for days WITHOUT attendance.
+ * Returns base daily rate = salary ÷ days_in_month
+ */
+function calculateSundayAutoPay(dailyWage, date, config) {
+  const d = new Date(date);
+  const daysInMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  const standardHours = parseFloat(config.regular_hours || "10");
+  const standardRate = dailyWage / daysInMonth / standardHours;
+  const basePay = standardHours * standardRate;
+  return Math.round(basePay * 100) / 100;
+}
+
+module.exports = { calculatePayment, calculateSundayAutoPay };

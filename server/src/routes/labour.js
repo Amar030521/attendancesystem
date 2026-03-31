@@ -1,15 +1,46 @@
 const express = require("express");
 const { authMiddleware, requireRole } = require("../middleware/auth");
 const { supabase } = require("../db");
-const { calculatePayment } = require("../utils/calculatePayment");
+const { calculatePayment, calculateSundayAutoPay } = require("../utils/calculatePayment");
 const { uaeNow, uaeToday, uaeYesterday, uaeDateStr } = require("../utils/uaeTime");
 
 const router = express.Router();
 router.use(authMiddleware, requireRole("labour"));
 
-// Legacy helper kept for non-timezone-critical formatting
 function toDateStr(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/**
+ * Get Sundays and holidays in a month that DON'T have attendance.
+ * Returns { autoPay, autoPayDays }
+ */
+function getSundaysAndHolidaysInMonth(monthStr, holidayDates) {
+  const [y, m] = monthStr.split("-").map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const dates = [];
+  for (let day = 1; day <= daysInMonth; day++) {
+    const d = new Date(y, m - 1, day);
+    const dateStr = `${y}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    if (d.getDay() === 0 || (holidayDates || []).includes(dateStr)) {
+      dates.push(dateStr);
+    }
+  }
+  return dates;
+}
+
+function calcSundayAutoPayForMonth(monthStr, dailyWage, attendanceDates, holidayDates, config) {
+  const allSundaysHolidays = getSundaysAndHolidaysInMonth(monthStr, holidayDates);
+  const attendedSet = new Set(attendanceDates);
+  let autoPay = 0;
+  let autoPayDays = 0;
+  for (const dateStr of allSundaysHolidays) {
+    if (!attendedSet.has(dateStr)) {
+      autoPay += calculateSundayAutoPay(dailyWage, dateStr, config);
+      autoPayDays++;
+    }
+  }
+  return { autoPay: Math.round(autoPay * 100) / 100, autoPayDays };
 }
 
 // GET /api/labour/dashboard
@@ -19,9 +50,14 @@ router.get("/dashboard", async (req, res) => {
     const uae = uaeNow();
     const yesterday = uaeYesterday();
     const today = uaeToday();
-    const monthStart = `${uae.year}-${String(uae.month).padStart(2, "0")}-01`;
+    const monthStr = `${uae.year}-${String(uae.month).padStart(2, "0")}`;
+    const monthStart = `${monthStr}-01`;
 
     const { data: userInfo } = await supabase.from("users").select("designation, daily_wage").eq("id", labourId).single();
+
+    // Get advance payment total from advance_payments table
+    const { data: advRows } = await supabase.from("advance_payments").select("amount, date, notes").eq("labour_id", labourId).order("date", { ascending: false });
+    const totalAdvance = (advRows || []).reduce((s, r) => s + (r.amount || 0), 0);
 
     const { data: yesterdayAtt } = await supabase
       .from("attendance").select("*, clients(name), sites(name)")
@@ -32,26 +68,35 @@ router.get("/dashboard", async (req, res) => {
       .eq("labour_id", labourId).eq("date", today).single();
 
     const { data: monthRows } = await supabase
-      .from("attendance").select("total_pay, regular_pay, ot_pay, is_sunday, is_holiday")
+      .from("attendance").select("total_pay, regular_pay, ot_pay, is_sunday, is_holiday, date")
       .eq("labour_id", labourId).gte("date", monthStart);
 
     const mr = monthRows || [];
+
+    // Calculate Sunday auto-pay for unattended Sundays/holidays
+    const { data: cfgRows } = await supabase.from("config").select("key, value");
+    const config = {}; (cfgRows || []).forEach(r => { config[r.key] = r.value; });
+    const { data: holidays } = await supabase.from("holidays").select("date").gte("date", monthStart).lt("date", `${uae.year}-${String(uae.month + 1).padStart(2, "0")}-01`);
+    const holidayDates = (holidays || []).map(h => h.date);
+    const attendanceDates = mr.map(r => r.date);
+    const { autoPay, autoPayDays } = calcSundayAutoPayForMonth(monthStr, userInfo?.daily_wage || 0, attendanceDates, holidayDates, config);
+
     const monthSummary = {
       daysWorked: mr.length,
-      totalEarnings: mr.reduce((s, r) => s + (r.total_pay || 0), 0),
-      regularPay: mr.reduce((s, r) => s + (r.regular_pay || 0), 0),
+      totalEarnings: mr.reduce((s, r) => s + (r.total_pay || 0), 0) + autoPay,
+      regularPay: mr.reduce((s, r) => s + (r.regular_pay || 0), 0) + autoPay,
       otPay: mr.reduce((s, r) => s + (r.ot_pay || 0), 0),
       sundayDays: mr.filter(r => r.is_sunday).length,
       holidayDays: mr.filter(r => r.is_holiday).length,
+      sundayAutoPay: autoPay,
+      sundayAutoPayDays: autoPayDays,
     };
 
     const flattenAtt = (a) => a ? { ...a, client_name: a.clients?.name, site_name: a.sites?.name, clients: undefined, sites: undefined } : null;
 
-    // Check if yesterday's cutoff has passed (default 16:30 / 4:30 PM)
-    const { data: cfgRows } = await supabase.from("config").select("key, value");
-    const cfg = {}; (cfgRows || []).forEach(r => { cfg[r.key] = r.value; });
-    const cutoffHour = parseInt(cfg.cutoff_hour || "16", 10);
-    const cutoffMinute = parseInt(cfg.cutoff_minute || "30", 10);
+    // Check if yesterday's cutoff has passed
+    const cutoffHour = parseInt(config.cutoff_hour || "16", 10);
+    const cutoffMinute = parseInt(config.cutoff_minute || "30", 10);
     const currentHour = uae.hours;
     const currentMinute = uae.minutes;
     const yesterdayCutoffPassed = (currentHour > cutoffHour) || (currentHour === cutoffHour && currentMinute >= cutoffMinute);
@@ -59,6 +104,8 @@ router.get("/dashboard", async (req, res) => {
     return res.json({
       designation: userInfo?.designation || null,
       dailyWage: userInfo?.daily_wage || 0,
+      advancePayment: Math.round(totalAdvance * 100) / 100,
+      advanceHistory: advRows || [],
       yesterday: flattenAtt(yesterdayAtt),
       todayEntry: flattenAtt(todayAtt),
       monthSummary,
@@ -136,7 +183,7 @@ router.post("/checkin", async (req, res) => {
       if (diffDays > 1) return res.status(400).json({ message: "Can only submit for today or yesterday" });
     }
 
-    // Block yesterday's submission after cutoff time (default 4:30 PM UAE)
+    // Block yesterday's submission after cutoff time
     if (workDate === yesterday) {
       const { data: cfgRows } = await supabase.from("config").select("key, value");
       const cfg = {}; (cfgRows || []).forEach(r => { cfg[r.key] = r.value; });
@@ -152,7 +199,7 @@ router.post("/checkin", async (req, res) => {
     const { data: dup } = await supabase.from("attendance").select("id").eq("labour_id", labourId).eq("date", workDate).single();
     if (dup) return res.status(400).json({ message: `Attendance for ${workDate} already exists` });
 
-    // Validate times (night shift aware)
+    // Validate times
     const validationError = validateTimes(start_time, end_time);
     if (validationError) return res.status(400).json({ message: validationError });
 

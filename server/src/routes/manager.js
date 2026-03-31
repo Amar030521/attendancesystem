@@ -1,7 +1,7 @@
 const express = require("express");
 const { authMiddleware, requireRole } = require("../middleware/auth");
 const { supabase } = require("../db");
-const { calculatePayment } = require("../utils/calculatePayment");
+const { calculatePayment, calculateSundayAutoPay } = require("../utils/calculatePayment");
 const { uaeNow, uaeToday, uaeYesterday } = require("../utils/uaeTime");
 const {
   generateDailyExcelReport, generateDailyPdfReport, generateMonthlyExcelReport,
@@ -10,6 +10,26 @@ const {
 } = require("../services/reportService");
 
 const router = express.Router();
+
+function getSundaysAndHolidaysInMonth(monthStr, holidayDates) {
+  const [y, m] = monthStr.split("-").map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const dates = [];
+  for (let day = 1; day <= daysInMonth; day++) {
+    const d = new Date(y, m - 1, day);
+    const dateStr = `${y}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    if (d.getDay() === 0 || (holidayDates || []).includes(dateStr)) dates.push(dateStr);
+  }
+  return dates;
+}
+
+function calcSundayAutoPayForMonth(monthStr, dailyWage, attendanceDates, holidayDates, config) {
+  const allSH = getSundaysAndHolidaysInMonth(monthStr, holidayDates);
+  const attendedSet = new Set(attendanceDates);
+  let autoPay = 0, autoPayDays = 0;
+  for (const ds of allSH) { if (!attendedSet.has(ds)) { autoPay += calculateSundayAutoPay(dailyWage, ds, config); autoPayDays++; } }
+  return { autoPay: Math.round(autoPay * 100) / 100, autoPayDays };
+}
 router.use(authMiddleware, requireRole("manager"));
 
 function toDateStr(d) {
@@ -157,9 +177,22 @@ router.get("/reports/daily", async (req, res) => {
 router.get("/reports/monthly", async (req, res) => {
   try {
     const { month, format } = req.query; if (!month) return res.status(400).json({ message: "month required" });
+    const { data: cfgRows } = await supabase.from("config").select("key, value");
+    const config = {}; (cfgRows || []).forEach(r => { config[r.key] = r.value; });
     const { data } = await supabase.from("attendance").select("*, users(name, designation), clients(name), sites(name)").gte("date", `${month}-01`).lt("date", nextMonthStart(month)).order("date").order("labour_id");
     const rows = (data || []).map(a => ({ ...a, labour_name: a.users?.name, client_name: a.clients?.name, site_name: a.sites?.name }));
-    if (format === "xlsx") { const buf = generateMonthlyExcelReport(month, rows); res.setHeader("Content-Disposition", `attachment; filename="Monthly_${month}.xlsx"`); res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"); return res.send(Buffer.from(buf)); }
+    const { data: labours } = await supabase.from("users").select("id, name, daily_wage").eq("role", "labour").eq("status", "active");
+    const { data: holidays } = await supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
+    const holidayDates = (holidays || []).map(h => h.date);
+    const attByLabour = {};
+    rows.forEach(r => { if (!attByLabour[r.labour_id]) attByLabour[r.labour_id] = []; attByLabour[r.labour_id].push(r.date); });
+    const sundayAutoPayMap = {};
+    (labours || []).forEach(l => {
+      const attendanceDates = attByLabour[l.id] || [];
+      const { autoPay } = calcSundayAutoPayForMonth(month, l.daily_wage, attendanceDates, holidayDates, config);
+      if (autoPay > 0) { sundayAutoPayMap[l.id] = autoPay; sundayAutoPayMap[l.id + "_name"] = l.name; }
+    });
+    if (format === "xlsx") { const buf = generateMonthlyExcelReport(month, rows, sundayAutoPayMap); res.setHeader("Content-Disposition", `attachment; filename="Monthly_${month}.xlsx"`); res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"); return res.send(Buffer.from(buf)); }
     res.json(rows);
   } catch (err) { res.status(500).json({ message: "Internal server error" }); }
 });
@@ -167,12 +200,22 @@ router.get("/reports/monthly", async (req, res) => {
 router.get("/reports/payroll", async (req, res) => {
   try {
     const { month, format } = req.query; if (!month) return res.status(400).json({ message: "month required" });
+    const { data: cfgRows } = await supabase.from("config").select("key, value");
+    const config = {}; (cfgRows || []).forEach(r => { config[r.key] = r.value; });
     const { data: labours } = await supabase.from("users").select("id, name, daily_wage").eq("role", "labour").eq("status", "active").order("id");
     const { data: attendance } = await supabase.from("attendance").select("*").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
+    const { data: holidays } = await supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
+    const holidayDates = (holidays || []).map(h => h.date);
     const attByLabour = {}; (attendance || []).forEach(a => { if (!attByLabour[a.labour_id]) attByLabour[a.labour_id] = []; attByLabour[a.labour_id].push(a); });
     const rows = (labours || []).map(l => {
       const recs = attByLabour[l.id] || [];
-      return { labour_id: l.id, labour_name: l.name, daily_wage: l.daily_wage, days_worked: recs.length, total_hours: recs.reduce((s, r) => s + (r.hours_worked || 0), 0), total_regular: recs.reduce((s, r) => s + (r.regular_pay || 0), 0), total_ot: recs.reduce((s, r) => s + (r.ot_pay || 0), 0), total_pay: recs.reduce((s, r) => s + (r.total_pay || 0), 0), sunday_days: recs.filter(r => r.is_sunday).length, holiday_days: recs.filter(r => r.is_holiday).length };
+      const attendanceDates = recs.map(r => r.date);
+      const allSH = getSundaysAndHolidaysInMonth(month, holidayDates);
+      const attendedSet = new Set(attendanceDates);
+      let autoPay = 0;
+      for (const ds of allSH) { if (!attendedSet.has(ds)) autoPay += calculateSundayAutoPay(l.daily_wage, ds, config); }
+      autoPay = Math.round(autoPay * 100) / 100;
+      return { labour_id: l.id, labour_name: l.name, daily_wage: l.daily_wage, days_worked: recs.length, total_hours: recs.reduce((s, r) => s + (r.hours_worked || 0), 0), total_regular: recs.reduce((s, r) => s + (r.regular_pay || 0), 0) + autoPay, total_ot: recs.reduce((s, r) => s + (r.ot_pay || 0), 0), total_pay: recs.reduce((s, r) => s + (r.total_pay || 0), 0) + autoPay, sunday_days: recs.filter(r => r.is_sunday).length, holiday_days: recs.filter(r => r.is_holiday).length };
     });
     if (format === "xlsx") { const buf = generatePayrollExcelReport(month, rows); res.setHeader("Content-Disposition", `attachment; filename="Payroll_${month}.xlsx"`); res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"); return res.send(Buffer.from(buf)); }
     res.json(rows);
@@ -182,10 +225,16 @@ router.get("/reports/payroll", async (req, res) => {
 router.get("/reports/labour/:id", async (req, res) => {
   try {
     const { month, format } = req.query; const { id } = req.params;
+    const { data: cfgRows } = await supabase.from("config").select("key, value");
+    const config = {}; (cfgRows || []).forEach(r => { config[r.key] = r.value; });
     const { data } = await supabase.from("attendance").select("*, clients(name), sites(name)").eq("labour_id", id).gte("date", `${month}-01`).lt("date", nextMonthStart(month)).order("date");
     const rows = (data || []).map(a => ({ ...a, client_name: a.clients?.name, site_name: a.sites?.name }));
-    const { data: user } = await supabase.from("users").select("name").eq("id", id).single();
-    if (format === "xlsx") { const buf = generateLabourExcelReport(month, user?.name || id, rows); res.setHeader("Content-Disposition", `attachment; filename="Labour_${id}_${month}.xlsx"`); res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"); return res.send(Buffer.from(buf)); }
+    const { data: user } = await supabase.from("users").select("id, name, daily_wage").eq("id", id).single();
+    const { data: holidays } = await supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
+    const holidayDates = (holidays || []).map(h => h.date);
+    const attendanceDates = rows.map(r => r.date);
+    const { autoPay } = calcSundayAutoPayForMonth(month, user?.daily_wage || 0, attendanceDates, holidayDates, config);
+    if (format === "xlsx") { const buf = generateLabourExcelReport(user, month, rows, autoPay); res.setHeader("Content-Disposition", `attachment; filename="Labour_${id}_${month}.xlsx"`); res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"); return res.send(Buffer.from(buf)); }
     res.json(rows);
   } catch (err) { res.status(500).json({ message: "Internal server error" }); }
 });

@@ -254,6 +254,29 @@ export function LabourDashboard() {
           </div>
         </div>
 
+        {/* Advance Payment */}
+        {summary?.advancePayment > 0 && (
+          <div className="bg-gradient-to-br from-red-50 to-red-100 rounded-2xl border border-red-200 p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-medium text-red-600">Advance Payment</p>
+                <p className="text-lg font-bold text-red-700 mt-0.5">AED {Number(summary.advancePayment).toLocaleString()}</p>
+              </div>
+              <div className="w-10 h-10 rounded-xl bg-red-200/50 flex items-center justify-center text-lg">💸</div>
+            </div>
+            {summary.advanceHistory && summary.advanceHistory.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-red-200/60 space-y-1.5">
+                {summary.advanceHistory.map((r, i) => (
+                  <div key={i} className="flex items-center justify-between text-xs">
+                    <span className="text-red-600 font-medium">AED {Number(r.amount).toLocaleString()}</span>
+                    <span className="text-red-400">{new Date(r.date).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Quick Check-In Prompt */}
         {needsCheckin && (
           <button onClick={() => setActiveTab("checkin")}

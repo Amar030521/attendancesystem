@@ -18,7 +18,18 @@ export function LabourManagement() {
   const [detailLabour, setDetailLabour] = useState(null);
   const [page, setPage] = useState(1);
 
-  useEffect(() => { loadLabours(); }, []);
+  // Advance payment state
+  const [advanceModal, setAdvanceModal] = useState(null); // { labour_id, name }
+  const [advanceRecords, setAdvanceRecords] = useState([]);
+  const [advanceTotal, setAdvanceTotal] = useState(0);
+  const [advanceLoading, setAdvanceLoading] = useState(false);
+  const [advanceForm, setAdvanceForm] = useState({ amount: "", date: new Date().toISOString().slice(0, 10), notes: "" });
+  const [advanceSaving, setAdvanceSaving] = useState(false);
+
+  // Track advance totals per labour for display
+  const [advanceTotals, setAdvanceTotals] = useState({});
+
+  useEffect(() => { loadLabours(); loadAdvanceSummary(); }, []);
 
   async function loadLabours() {
     try { setLoading(true); setLabours((await api.get("/admin/labours")).data); }
@@ -26,9 +37,55 @@ export function LabourManagement() {
     finally { setLoading(false); }
   }
 
+  async function loadAdvanceSummary() {
+    try {
+      const { data } = await api.get("/admin/advance-payments-summary");
+      setAdvanceTotals(data.byLabour || {});
+    } catch (err) { console.error(err); }
+  }
+
+  async function loadAdvanceRecords(labourId) {
+    try {
+      setAdvanceLoading(true);
+      const { data } = await api.get(`/admin/advance-payments/${labourId}`);
+      setAdvanceRecords(data.records || []);
+      setAdvanceTotal(data.total || 0);
+    } catch (err) { console.error(err); }
+    finally { setAdvanceLoading(false); }
+  }
+
   function openAddModal() { setModalMode("add"); setFormData({ name: "", daily_wage: "", phone: "", passport_id: "", designation: "", date_of_joining: "" }); setCurrentLabour(null); setShowModal(true); }
   function openEditModal(labour) { setModalMode("edit"); setCurrentLabour(labour); setFormData({ name: labour.name, daily_wage: labour.daily_wage, phone: labour.phone || "", passport_id: labour.passport_id || "", designation: labour.designation || "", date_of_joining: labour.date_of_joining || "" }); setShowModal(true); setDetailLabour(null); }
   function closeModal() { setShowModal(false); setFormData({ name: "", daily_wage: "", phone: "", passport_id: "", designation: "", date_of_joining: "" }); setCurrentLabour(null); }
+
+  function openAdvanceModal(labour) {
+    setAdvanceModal({ labour_id: labour.id, name: labour.name });
+    setAdvanceForm({ amount: "", date: new Date().toISOString().slice(0, 10), notes: "" });
+    loadAdvanceRecords(labour.id);
+    setDetailLabour(null);
+  }
+
+  async function handleAddAdvance() {
+    if (!advanceForm.amount || Number(advanceForm.amount) <= 0) { alert("Enter a valid amount"); return; }
+    if (!advanceForm.date) { alert("Select a date"); return; }
+    try {
+      setAdvanceSaving(true);
+      await api.post("/admin/advance-payments", { labour_id: advanceModal.labour_id, amount: Number(advanceForm.amount), date: advanceForm.date, notes: advanceForm.notes });
+      setAdvanceForm({ amount: "", date: new Date().toISOString().slice(0, 10), notes: "" });
+      await loadAdvanceRecords(advanceModal.labour_id);
+      await loadAdvanceSummary();
+    } catch (err) { alert(err.response?.data?.message || "Failed"); }
+    finally { setAdvanceSaving(false); }
+  }
+
+  async function handleDeleteAdvance(id) {
+    if (!window.confirm("Delete this advance record?")) return;
+    try {
+      await api.delete(`/admin/advance-payments/${id}`);
+      await loadAdvanceRecords(advanceModal.labour_id);
+      await loadAdvanceSummary();
+    } catch (err) { alert("Failed to delete"); }
+  }
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -46,10 +103,10 @@ export function LabourManagement() {
     } catch (err) { alert(err.response?.data?.message || "Failed to save labour"); }
   }
 
-  async function handleDeactivate(id, name) { if (!window.confirm(`Deactivate ${name}?`)) return; try { await api.delete(`/admin/labours/${id}`); await loadLabours(); setDetailLabour(null); } catch (err) { alert("Failed to deactivate"); } }
-  async function handleActivate(id, name) { if (!window.confirm(`Reactivate ${name}?`)) return; try { await api.put(`/admin/labours/${id}/activate`); await loadLabours(); setDetailLabour(null); } catch (err) { alert("Failed to activate"); } }
-  async function handlePermanentDelete(id, name) { if (!window.confirm(`PERMANENTLY DELETE ${name} and ALL their records?\n\nThis CANNOT be undone!`)) return; try { await api.delete(`/admin/labours/${id}/permanent`); await loadLabours(); setDetailLabour(null); alert("Permanently deleted."); } catch (err) { alert("Failed to delete"); } }
-  async function handleResetPin(id, name) { if (!window.confirm(`Reset PIN for ${name}?`)) return; try { const res = await api.post(`/admin/labours/${id}/reset-pin`); setKnownPins(prev => ({ ...prev, [id]: res.data.newPin })); alert(`New PIN for ${name}: ${res.data.newPin}`); } catch (err) { alert("Failed to reset PIN"); } }
+  async function handleDeactivate(id, name) { if (!window.confirm(`Deactivate ${name}?`)) return; try { await api.delete(`/admin/labours/${id}`); await loadLabours(); setDetailLabour(null); } catch (err) { alert("Failed"); } }
+  async function handleActivate(id, name) { if (!window.confirm(`Reactivate ${name}?`)) return; try { await api.put(`/admin/labours/${id}/activate`); await loadLabours(); setDetailLabour(null); } catch (err) { alert("Failed"); } }
+  async function handlePermanentDelete(id, name) { if (!window.confirm(`PERMANENTLY DELETE ${name} and ALL their records?\n\nThis CANNOT be undone!`)) return; try { await api.delete(`/admin/labours/${id}/permanent`); await loadLabours(); setDetailLabour(null); alert("Deleted."); } catch (err) { alert("Failed"); } }
+  async function handleResetPin(id, name) { if (!window.confirm(`Reset PIN for ${name}?`)) return; try { const res = await api.post(`/admin/labours/${id}/reset-pin`); setKnownPins(prev => ({ ...prev, [id]: res.data.newPin })); alert(`New PIN for ${name}: ${res.data.newPin}`); } catch (err) { alert("Failed"); } }
 
   async function handleCSVImport(e) {
     const file = e.target.files[0]; if (!file) return;
@@ -65,18 +122,14 @@ export function LabourManagement() {
   }
 
   const filteredLabours = useMemo(() => labours.filter(l =>
-    l.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    String(l.id).includes(searchTerm) ||
+    l.name.toLowerCase().includes(searchTerm.toLowerCase()) || String(l.id).includes(searchTerm) ||
     (l.passport_id && l.passport_id.toLowerCase().includes(searchTerm.toLowerCase())) ||
     (l.designation && l.designation.toLowerCase().includes(searchTerm.toLowerCase()))
   ), [labours, searchTerm]);
 
-  // Reset to page 1 when search changes
   useEffect(() => { setPage(1); }, [searchTerm]);
-
   const totalPages = Math.ceil(filteredLabours.length / PAGE_SIZE);
   const pagedLabours = filteredLabours.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-
   const fmtDate = (d) => d ? new Date(d).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "-";
 
   return (
@@ -89,12 +142,12 @@ export function LabourManagement() {
         </div>
       </div>
 
-      <input type="text" placeholder="Search by name, ID, or designation..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+      <input type="text" placeholder="Search by name, ID, or designation..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm" />
 
       <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-sm">
         <p className="font-medium text-blue-900">Import Format (CSV or Excel):</p>
         <code className="text-xs bg-blue-100 px-2 py-1 rounded mt-1 inline-block">name, daily_wage, phone, passport_id, designation, date_of_joining</code>
-        <p className="text-xs text-blue-700 mt-1">Supports .csv and .xlsx files. Wages can have commas (e.g. 1,200). IDs and PINs auto-generated.</p>
+        <p className="text-xs text-blue-700 mt-1">Supports .csv and .xlsx files. Wages can have commas. IDs and PINs auto-generated.</p>
       </div>
 
       {loading ? <LoadingSpinner label="Loading labours..." /> : (<>
@@ -106,7 +159,12 @@ export function LabourManagement() {
                 <div className="flex items-center justify-between">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2"><span className="text-sm font-bold text-gray-900 truncate">{l.name}</span><span className="text-[10px] text-gray-400 shrink-0">#{l.id}</span></div>
-                    <div className="flex items-center gap-2 mt-0.5"><span className="text-xs text-gray-500">{l.designation || "No designation"}</span><span className="text-xs text-gray-300">•</span><span className="text-xs font-medium text-gray-600">AED {Number(l.daily_wage).toLocaleString()}/mo</span></div>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className="text-xs text-gray-500">{l.designation || "No designation"}</span>
+                      <span className="text-xs text-gray-300">•</span>
+                      <span className="text-xs font-medium text-gray-600">AED {Number(l.daily_wage).toLocaleString()}/mo</span>
+                      {advanceTotals[l.id] > 0 && <><span className="text-xs text-gray-300">•</span><span className="text-xs font-medium text-red-500">Adv: {Number(advanceTotals[l.id]).toLocaleString()}</span></>}
+                    </div>
                   </div>
                   <div className="flex items-center gap-2 ml-2 shrink-0">
                     <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${l.status === "active" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>{l.status}</span>
@@ -127,6 +185,7 @@ export function LabourManagement() {
               <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Name</th>
               <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Designation</th>
               <th className="px-3 py-3 text-right text-xs font-semibold text-gray-600">Monthly Wages</th>
+              <th className="px-3 py-3 text-right text-xs font-semibold text-gray-600">Advance</th>
               <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Phone</th>
               <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Passport</th>
               <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Joining</th>
@@ -135,13 +194,14 @@ export function LabourManagement() {
               <th className="px-3 py-3 text-right text-xs font-semibold text-gray-600">Actions</th>
             </tr></thead>
             <tbody className="divide-y divide-gray-100">
-              {pagedLabours.length === 0 ? <tr><td colSpan="10" className="px-4 py-8 text-center text-gray-400">No labours found</td></tr> :
+              {pagedLabours.length === 0 ? <tr><td colSpan="11" className="px-4 py-8 text-center text-gray-400">No labours found</td></tr> :
                 pagedLabours.map(l => (
                   <tr key={l.id} className="hover:bg-gray-50/50">
                     <td className="px-3 py-3 font-medium">{l.id}</td>
                     <td className="px-3 py-3">{l.name}</td>
                     <td className="px-3 py-3 text-xs text-gray-600">{l.designation || "-"}</td>
                     <td className="px-3 py-3 text-right">AED {Number(l.daily_wage).toLocaleString()}</td>
+                    <td className="px-3 py-3 text-right">{advanceTotals[l.id] > 0 ? <button onClick={() => openAdvanceModal(l)} className="text-red-600 font-semibold hover:underline">AED {Number(advanceTotals[l.id]).toLocaleString()}</button> : <button onClick={() => openAdvanceModal(l)} className="text-gray-400 hover:text-blue-600 text-xs">+ Add</button>}</td>
                     <td className="px-3 py-3">{l.phone || "-"}</td>
                     <td className="px-3 py-3">{l.passport_id || "-"}</td>
                     <td className="px-3 py-3">{fmtDate(l.date_of_joining)}</td>
@@ -158,9 +218,7 @@ export function LabourManagement() {
               }
             </tbody>
           </table>
-          <div className="px-4 py-2 border-t border-gray-100">
-            <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} totalItems={filteredLabours.length} pageSize={PAGE_SIZE} />
-          </div>
+          <div className="px-4 py-2 border-t border-gray-100"><Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} totalItems={filteredLabours.length} pageSize={PAGE_SIZE} /></div>
         </div>
       </>)}
 
@@ -176,18 +234,63 @@ export function LabourManagement() {
               </div>
             </div>
             <div className="px-5 py-4 space-y-3">
-              {[{ label: "Designation", value: detailLabour.designation || "-" },{ label: "Monthly Wages", value: `AED ${Number(detailLabour.daily_wage).toLocaleString()}` },{ label: "Phone", value: detailLabour.phone || "-" },{ label: "Passport ID", value: detailLabour.passport_id || "-" },{ label: "Date of Joining", value: fmtDate(detailLabour.date_of_joining) },{ label: "PIN", value: knownPins[detailLabour.id] || "••••" }].map((row, i) => (
+              {[{ label: "Designation", value: detailLabour.designation || "-" },{ label: "Monthly Wages", value: `AED ${Number(detailLabour.daily_wage).toLocaleString()}` },{ label: "Advance Payment", value: advanceTotals[detailLabour.id] > 0 ? `AED ${Number(advanceTotals[detailLabour.id]).toLocaleString()}` : "None" },{ label: "Phone", value: detailLabour.phone || "-" },{ label: "Passport ID", value: detailLabour.passport_id || "-" },{ label: "Date of Joining", value: fmtDate(detailLabour.date_of_joining) },{ label: "PIN", value: knownPins[detailLabour.id] || "••••" }].map((row, i) => (
                 <div key={i} className="flex items-center justify-between py-1.5 border-b border-gray-50 last:border-0"><span className="text-xs text-gray-500 font-medium">{row.label}</span><span className="text-sm font-medium text-gray-900">{row.value}</span></div>
               ))}
             </div>
             <div className="px-5 pb-5 pt-1 space-y-2">
-              <button onClick={() => openEditModal(detailLabour)} className="w-full py-2.5 bg-blue-600 text-white rounded-xl text-sm font-semibold">Edit Details</button>
+              <button onClick={() => openAdvanceModal(detailLabour)} className="w-full py-2.5 bg-red-500 text-white rounded-xl text-sm font-semibold hover:bg-red-600">💸 Advance Payments</button>
+              <button onClick={() => openEditModal(detailLabour)} className="w-full py-2.5 bg-blue-600 text-white rounded-xl text-sm font-semibold hover:bg-blue-700">Edit Details</button>
               <button onClick={() => handleResetPin(detailLabour.id, detailLabour.name)} className="w-full py-2.5 bg-amber-500 text-white rounded-xl text-sm font-semibold">Reset PIN</button>
               <div className="grid grid-cols-2 gap-2">
                 {detailLabour.status === "active" ? <button onClick={() => handleDeactivate(detailLabour.id, detailLabour.name)} className="py-2.5 bg-orange-100 text-orange-700 rounded-xl text-sm font-semibold">Deactivate</button> : <button onClick={() => handleActivate(detailLabour.id, detailLabour.name)} className="py-2.5 bg-green-100 text-green-700 rounded-xl text-sm font-semibold">Activate</button>}
                 <button onClick={() => handlePermanentDelete(detailLabour.id, detailLabour.name)} className="py-2.5 bg-red-100 text-red-700 rounded-xl text-sm font-semibold">Delete</button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ADVANCE PAYMENT MODAL */}
+      {advanceModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full max-h-[90vh] overflow-y-auto">
+            <div className="px-5 py-4 border-b bg-red-50 rounded-t-xl">
+              <h3 className="text-base font-bold text-red-900">💸 Advance Payments — {advanceModal.name}</h3>
+              <p className="text-xs text-red-600 mt-0.5">Total: AED {advanceTotal.toLocaleString()}</p>
+            </div>
+            {/* Add new advance */}
+            <div className="px-5 py-4 border-b border-gray-100 space-y-3">
+              <p className="text-xs font-semibold text-gray-700">Add New Advance</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="block text-xs text-gray-500 mb-1">Amount (AED) *</label><input type="number" min="1" value={advanceForm.amount} onChange={e => setAdvanceForm(f => ({ ...f, amount: e.target.value }))} className="w-full px-3 py-2 border rounded-lg text-sm" placeholder="e.g. 200" /></div>
+                <div><label className="block text-xs text-gray-500 mb-1">Date *</label><input type="date" value={advanceForm.date} onChange={e => setAdvanceForm(f => ({ ...f, date: e.target.value }))} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
+              </div>
+              <div><label className="block text-xs text-gray-500 mb-1">Notes (optional)</label><input type="text" value={advanceForm.notes} onChange={e => setAdvanceForm(f => ({ ...f, notes: e.target.value }))} className="w-full px-3 py-2 border rounded-lg text-sm" placeholder="e.g. Arrival advance, Emergency" /></div>
+              <button onClick={handleAddAdvance} disabled={advanceSaving} className="w-full py-2 bg-red-600 text-white rounded-lg text-sm font-semibold disabled:opacity-50">{advanceSaving ? "Saving..." : "+ Add Advance"}</button>
+            </div>
+            {/* History */}
+            <div className="px-5 py-3">
+              <p className="text-xs font-semibold text-gray-700 mb-2">History</p>
+              {advanceLoading ? <p className="text-center text-gray-400 py-4 text-sm">Loading...</p> :
+                advanceRecords.length === 0 ? <p className="text-center text-gray-400 py-4 text-sm">No advance payments recorded</p> :
+                <div className="space-y-2">
+                  {advanceRecords.map(r => (
+                    <div key={r.id} className="flex items-center justify-between py-2 px-3 bg-gray-50 rounded-lg">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-bold text-red-600">AED {Number(r.amount).toLocaleString()}</span>
+                          <span className="text-[10px] text-gray-400">{fmtDate(r.date)}</span>
+                        </div>
+                        {r.notes && <p className="text-xs text-gray-500 mt-0.5">{r.notes}</p>}
+                      </div>
+                      <button onClick={() => handleDeleteAdvance(r.id)} className="text-xs text-red-400 hover:text-red-600 px-2 py-1">✕</button>
+                    </div>
+                  ))}
+                </div>
+              }
+            </div>
+            <div className="px-5 py-3 border-t"><button onClick={() => setAdvanceModal(null)} className="w-full py-2.5 border rounded-xl text-sm font-medium">Close</button></div>
           </div>
         </div>
       )}
