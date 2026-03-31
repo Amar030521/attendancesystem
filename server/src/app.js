@@ -14,6 +14,9 @@ const { supabase } = require("./db");
 
 const app = express();
 
+// Trust proxy - required for express-rate-limit behind Render's reverse proxy
+app.set("trust proxy", 1);
+
 /* ===============================
    SECURITY
 ================================ */
