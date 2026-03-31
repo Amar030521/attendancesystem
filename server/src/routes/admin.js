@@ -649,6 +649,19 @@ router.delete("/managers/:id", async (req, res) => {
 });
 
 // ===== Advance Payments =====
+
+// Summary must be before :labourId to avoid "summary" being treated as an ID
+router.get("/advance-payments-summary", async (req, res) => {
+  try {
+    const { data } = await supabase.from("advance_payments").select("labour_id, amount");
+    const byLabour = {};
+    (data || []).forEach(r => { byLabour[r.labour_id] = (byLabour[r.labour_id] || 0) + (r.amount || 0); });
+    const total = Object.values(byLabour).reduce((s, v) => s + v, 0);
+    const count = Object.keys(byLabour).length;
+    return res.json({ total: Math.round(total * 100) / 100, laboursWithAdvance: count, byLabour });
+  } catch (err) { console.error(err); return res.status(500).json({ message: "Internal server error" }); }
+});
+
 router.get("/advance-payments/:labourId", async (req, res) => {
   try {
     const { data } = await supabase.from("advance_payments").select("*").eq("labour_id", req.params.labourId).order("date", { ascending: false });
@@ -674,18 +687,6 @@ router.delete("/advance-payments/:id", async (req, res) => {
   try {
     await supabase.from("advance_payments").delete().eq("id", req.params.id);
     return res.json({ message: "Deleted" });
-  } catch (err) { console.error(err); return res.status(500).json({ message: "Internal server error" }); }
-});
-
-// Get advance summary for all labours (for overview)
-router.get("/advance-payments-summary", async (req, res) => {
-  try {
-    const { data } = await supabase.from("advance_payments").select("labour_id, amount");
-    const byLabour = {};
-    (data || []).forEach(r => { byLabour[r.labour_id] = (byLabour[r.labour_id] || 0) + (r.amount || 0); });
-    const total = Object.values(byLabour).reduce((s, v) => s + v, 0);
-    const count = Object.keys(byLabour).length;
-    return res.json({ total: Math.round(total * 100) / 100, laboursWithAdvance: count, byLabour });
   } catch (err) { console.error(err); return res.status(500).json({ message: "Internal server error" }); }
 });
 
