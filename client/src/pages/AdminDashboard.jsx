@@ -9,9 +9,9 @@ import { ConfigManagement } from "../components/ConfigManagement";
 import { IncentiveManagement } from "../components/IncentiveManagement";
 import { ManagerManagement } from "../components/ManagerManagement";
 import { api, getStoredUser, setAuth } from "../api";
-import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, PointElement, LineElement, ArcElement, Title, Tooltip, Legend, Filler } from "chart.js";
+import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, BarController, PointElement, LineElement, LineController, ArcElement, Title, Tooltip, Legend, Filler } from "chart.js";
 import { Bar, Doughnut } from "react-chartjs-2";
-ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineElement, ArcElement, Title, Tooltip, Legend, Filler);
+ChartJS.register(CategoryScale, LinearScale, BarElement, BarController, PointElement, LineElement, LineController, ArcElement, Title, Tooltip, Legend, Filler);
 
 function formatCurrency(a) { return "AED " + (a || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
 const todayISO = () => new Date().toISOString().slice(0, 10);
