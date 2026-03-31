@@ -3,14 +3,6 @@ import { api, getStoredUser } from "../api";
 import { LayoutShell } from "../components/LayoutShell";
 import { LoadingSpinner } from "../components/LoadingSpinner";
 import { calculatePayment } from "../utils/calculatePayment";
-import {
-  Chart as ChartJS, CategoryScale, LinearScale,
-  PointElement, LineElement, ArcElement,
-  Title, Tooltip, Legend, Filler
-} from "chart.js";
-import { Line, Pie } from "react-chartjs-2";
-
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, ArcElement, Title, Tooltip, Legend, Filler);
 
 function formatCurrency(amount) {
   return new Intl.NumberFormat("en-AE", {
@@ -194,30 +186,6 @@ export function LabourDashboard() {
     return (eh * 60) <= (sh * 60);
   }, [form.start_time, form.end_time]);
 
-  const lineChartData = useMemo(() => {
-    try {
-      if (!history || history.length === 0) return null;
-      const sorted = [...history].sort((a, b) => new Date(a.date) - new Date(b.date));
-      return {
-        labels: sorted.map((h) => { const d = new Date(h.date); return `${d.getDate()}/${d.getMonth() + 1}`; }),
-        datasets: [{ label: "Daily Earnings (AED)", data: sorted.map((h) => h.total_pay || 0), borderColor: "rgb(34, 197, 94)", backgroundColor: "rgba(34, 197, 94, 0.1)", tension: 0.3, fill: true }],
-      };
-    } catch { return null; }
-  }, [history]);
-
-  const pieChartData = useMemo(() => {
-    try {
-      if (!history || history.length === 0) return null;
-      const totalRegular = history.reduce((s, h) => s + (h.regular_pay || 0), 0);
-      const totalOT = history.reduce((s, h) => s + (h.ot_pay || 0), 0);
-      if (totalRegular === 0 && totalOT === 0) return null;
-      return {
-        labels: ["Regular Pay", "Overtime Pay"],
-        datasets: [{ data: [totalRegular, totalOT], backgroundColor: ["rgb(59, 130, 246)", "rgb(249, 115, 22)"], borderWidth: 2, borderColor: "#fff" }],
-      };
-    } catch { return null; }
-  }, [history]);
-
   if (loading) return <LayoutShell title="Attendance & Earnings"><LoadingSpinner label="Loading..." /></LayoutShell>;
 
   const canCheckYesterday = !yesterdayEntry && !yesterdayCutoffPassed;
@@ -227,42 +195,102 @@ export function LabourDashboard() {
 
   // ===================== TAB: HOME =====================
   function renderHome() {
+    const ms = summary?.monthSummary;
+    const totalEarn = ms?.totalEarnings || 0;
+    const regPay = ms?.regularPay || 0;
+    const otPay = ms?.otPay || 0;
+    const otPercent = totalEarn > 0 ? Math.round((otPay / totalEarn) * 100) : 0;
+    const regPercent = totalEarn > 0 ? 100 - otPercent : 0;
+
     return (
       <div className="space-y-4">
-        {/* Summary Cards */}
+        {/* Big Monthly Earnings */}
+        <div className="bg-gradient-to-br from-green-500 to-emerald-600 rounded-2xl shadow-lg p-5 text-white text-center">
+          <p className="text-xs font-medium opacity-80">This Month's Earnings</p>
+          <p className="text-3xl font-black mt-1">{formatCurrency(totalEarn)}</p>
+          <p className="text-xs opacity-70 mt-1">{ms?.daysWorked || 0} days worked</p>
+        </div>
+
+        {/* OT Highlight Card - the money motivator */}
+        {otPay > 0 && (
+          <div className="bg-gradient-to-r from-amber-400 to-orange-500 rounded-2xl shadow-lg p-4 text-white">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center text-2xl">🔥</div>
+              <div>
+                <p className="text-xs font-medium opacity-90">Extra OT Earned!</p>
+                <p className="text-2xl font-black">{formatCurrency(otPay)}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Simple Earnings Bar */}
+        {totalEarn > 0 && (
+          <div className="bg-white rounded-2xl shadow-md p-4">
+            <h3 className="text-sm font-bold text-gray-800 mb-3">💰 Pay Breakdown</h3>
+            {/* Visual bar */}
+            <div className="h-8 rounded-full overflow-hidden flex bg-gray-100 mb-3">
+              {regPercent > 0 && <div style={{ width: `${regPercent}%` }} className="bg-blue-500 flex items-center justify-center text-[10px] text-white font-bold transition-all">{regPercent > 15 && `${regPercent}%`}</div>}
+              {otPercent > 0 && <div style={{ width: `${otPercent}%` }} className="bg-orange-500 flex items-center justify-center text-[10px] text-white font-bold transition-all">{otPercent > 10 && `${otPercent}%`}</div>}
+            </div>
+            {/* Legend */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex items-center gap-2.5 bg-blue-50 rounded-xl p-3">
+                <div className="w-3 h-3 rounded-full bg-blue-500 shrink-0" />
+                <div>
+                  <p className="text-[10px] text-gray-500">Regular</p>
+                  <p className="text-sm font-bold text-blue-700">{formatCurrency(regPay)}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2.5 bg-orange-50 rounded-xl p-3">
+                <div className="w-3 h-3 rounded-full bg-orange-500 shrink-0" />
+                <div>
+                  <p className="text-[10px] text-gray-500">Overtime</p>
+                  <p className="text-sm font-bold text-orange-600">{formatCurrency(otPay)}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Yesterday + Today quick status */}
         <div className="grid grid-cols-2 gap-3">
-          <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-2xl shadow-lg p-4 text-white">
-            <h2 className="text-xs font-medium opacity-90 mb-1">Yesterday</h2>
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-3.5">
+            <p className="text-[10px] text-gray-400 font-medium">Yesterday</p>
             {yesterdayEntry ? (
               <>
-                <div className="text-xl font-bold">{formatCurrency(yesterdayEntry.total_pay)}</div>
-                <p className="text-[10px] opacity-80 mt-0.5">{yesterdayEntry.hours_worked}h • {yesterdayEntry.admin_verified ? "Verified ✓" : "Pending"}</p>
+                <p className="text-lg font-bold text-gray-900 mt-0.5">{formatCurrency(yesterdayEntry.total_pay)}</p>
+                <p className="text-[10px] text-gray-500">{yesterdayEntry.hours_worked}h • {yesterdayEntry.admin_verified ? "✅ Verified" : "⏳ Pending"}</p>
+                {yesterdayEntry.ot_pay > 0 && <p className="text-[10px] text-orange-500 font-semibold mt-0.5">+{formatCurrency(yesterdayEntry.ot_pay)} OT</p>}
               </>
             ) : yesterdayCutoffPassed ? (
-              <>
-                <div className="text-base font-bold opacity-90">Absent</div>
-                <p className="text-[10px] opacity-70">Cutoff passed</p>
-              </>
+              <p className="text-sm text-red-400 mt-1">Absent</p>
             ) : (
-              <div className="text-sm opacity-75 mt-1">Not submitted</div>
+              <p className="text-sm text-gray-400 mt-1">Not submitted</p>
             )}
           </div>
-          <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-2xl shadow-lg p-4 text-white">
-            <h2 className="text-xs font-medium opacity-90 mb-1">This Month</h2>
-            <div className="text-xl font-bold">{formatCurrency(summary?.monthSummary?.totalEarnings || 0)}</div>
-            <p className="text-[10px] opacity-80 mt-0.5">{summary?.monthSummary?.daysWorked || 0} days worked</p>
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-3.5">
+            <p className="text-[10px] text-gray-400 font-medium">Today</p>
+            {todayEntry ? (
+              <>
+                <p className="text-lg font-bold text-gray-900 mt-0.5">{formatCurrency(todayEntry.total_pay)}</p>
+                <p className="text-[10px] text-gray-500">{todayEntry.hours_worked}h</p>
+                {todayEntry.ot_pay > 0 && <p className="text-[10px] text-orange-500 font-semibold mt-0.5">+{formatCurrency(todayEntry.ot_pay)} OT</p>}
+              </>
+            ) : (
+              <p className="text-sm text-gray-400 mt-1">Not yet</p>
+            )}
           </div>
         </div>
 
         {/* Advance Payment */}
         {summary?.advancePayment > 0 && (
-          <div className="bg-gradient-to-br from-red-50 to-red-100 rounded-2xl border border-red-200 p-4">
+          <div className="bg-red-50 rounded-2xl border border-red-200 p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs font-medium text-red-600">Advance Payment</p>
+                <p className="text-xs font-medium text-red-600">💸 Advance Payment</p>
                 <p className="text-lg font-bold text-red-700 mt-0.5">AED {Number(summary.advancePayment).toLocaleString()}</p>
               </div>
-              <div className="w-10 h-10 rounded-xl bg-red-200/50 flex items-center justify-center text-lg">💸</div>
             </div>
             {summary.advanceHistory && summary.advanceHistory.length > 0 && (
               <div className="mt-3 pt-3 border-t border-red-200/60 space-y-1.5">
@@ -283,7 +311,7 @@ export function LabourDashboard() {
             className="w-full bg-gradient-to-r from-green-500 to-green-600 text-white rounded-2xl p-4 shadow-lg text-left active:scale-[0.98] transition-transform">
             <div className="flex items-center justify-between">
               <div>
-                <div className="font-bold text-base">Mark Attendance</div>
+                <div className="font-bold text-base">📋 Mark Attendance</div>
                 <div className="text-xs opacity-90 mt-0.5">
                   {canCheckToday && canCheckYesterday ? "Today & Yesterday available" :
                    canCheckToday ? "Submit for today" : "Submit for yesterday"}
@@ -294,75 +322,17 @@ export function LabourDashboard() {
           </button>
         )}
 
-        {/* Earnings Breakdown */}
-        {summary?.monthSummary?.totalEarnings > 0 && (
-          <div className="bg-white rounded-2xl shadow-md p-4">
-            <h2 className="text-sm font-bold text-gray-900 mb-3">Monthly Breakdown</h2>
-            <div className="grid grid-cols-2 gap-2">
-              <div className="bg-blue-50 rounded-xl p-3 text-center">
-                <div className="text-[10px] text-gray-500 mb-0.5">Regular Pay</div>
-                <div className="text-sm font-bold text-blue-700">{formatCurrency(summary.monthSummary.regularPay || 0)}</div>
+        {/* Sunday/Holiday info */}
+        {(ms?.sundayDays > 0 || ms?.holidayDays > 0) && (
+          <div className="bg-purple-50 rounded-2xl border border-purple-200 p-3.5">
+            <div className="flex items-center gap-3">
+              <span className="text-xl">📅</span>
+              <div className="text-xs text-purple-700">
+                {ms.sundayDays > 0 && <span className="font-semibold">{ms.sundayDays} Sundays</span>}
+                {ms.sundayDays > 0 && ms.holidayDays > 0 && " + "}
+                {ms.holidayDays > 0 && <span className="font-semibold">{ms.holidayDays} Holidays</span>}
+                <span className="text-purple-500"> worked this month</span>
               </div>
-              <div className="bg-amber-50 rounded-xl p-3 text-center">
-                <div className="text-[10px] text-gray-500 mb-0.5">Overtime Pay</div>
-                <div className="text-sm font-bold text-amber-700">{formatCurrency(summary.monthSummary.otPay || 0)}</div>
-              </div>
-              <div className="bg-purple-50 rounded-xl p-3 text-center">
-                <div className="text-[10px] text-gray-500 mb-0.5">Sundays</div>
-                <div className="text-sm font-bold text-purple-700">{summary.monthSummary.sundayDays || 0} days</div>
-              </div>
-              <div className="bg-red-50 rounded-xl p-3 text-center">
-                <div className="text-[10px] text-gray-500 mb-0.5">Holidays</div>
-                <div className="text-sm font-bold text-red-700">{summary.monthSummary.holidayDays || 0} days</div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Today's Entry */}
-        {todayEntry && (
-          <div className="bg-white rounded-2xl shadow-md p-4">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-sm font-bold text-gray-900">Today ({todayISO()})</h3>
-              <span className="bg-green-100 text-green-700 text-xs font-semibold px-2 py-0.5 rounded-full">✓ Submitted</span>
-            </div>
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <div><span className="text-gray-500">Client:</span> <span className="font-semibold">{todayEntry.client_name}</span></div>
-              <div><span className="text-gray-500">Site:</span> <span className="font-semibold">{todayEntry.site_name}</span></div>
-              <div><span className="text-gray-500">Time:</span> <span className="font-semibold">{todayEntry.start_time} - {todayEntry.end_time}</span></div>
-              <div><span className="text-gray-500">Hours:</span> <span className="font-semibold">{todayEntry.hours_worked}h</span></div>
-              <div><span className="text-gray-500">Regular:</span> <span className="font-semibold text-blue-700">{formatCurrency(todayEntry.regular_pay)}</span></div>
-              <div><span className="text-gray-500">OT:</span> <span className="font-semibold text-amber-700">{formatCurrency(todayEntry.ot_pay)}</span></div>
-              <div className="col-span-2"><span className="text-gray-500">Total Pay:</span> <span className="font-bold text-green-700">{formatCurrency(todayEntry.total_pay)}</span></div>
-            </div>
-          </div>
-        )}
-
-        {/* Yesterday's Entry */}
-        {yesterdayEntry && (
-          <div className="bg-white rounded-2xl shadow-md p-4">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-sm font-bold text-gray-900">Yesterday ({getYesterdayISO()})</h3>
-              <span className="bg-green-100 text-green-700 text-xs font-semibold px-2 py-0.5 rounded-full">✓ Submitted</span>
-            </div>
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <div><span className="text-gray-500">Client:</span> <span className="font-semibold">{yesterdayEntry.client_name}</span></div>
-              <div><span className="text-gray-500">Site:</span> <span className="font-semibold">{yesterdayEntry.site_name}</span></div>
-              <div><span className="text-gray-500">Time:</span> <span className="font-semibold">{yesterdayEntry.start_time} - {yesterdayEntry.end_time}</span></div>
-              <div><span className="text-gray-500">Hours:</span> <span className="font-semibold">{yesterdayEntry.hours_worked}h</span></div>
-              <div><span className="text-gray-500">Regular:</span> <span className="font-semibold text-blue-700">{formatCurrency(yesterdayEntry.regular_pay)}</span></div>
-              <div><span className="text-gray-500">OT:</span> <span className="font-semibold text-amber-700">{formatCurrency(yesterdayEntry.ot_pay)}</span></div>
-              <div className="col-span-2"><span className="text-gray-500">Total Pay:</span> <span className="font-bold text-green-700">{formatCurrency(yesterdayEntry.total_pay)}</span></div>
-            </div>
-          </div>
-        )}
-
-        {/* Recent Chart - compact */}
-        {pieChartData && (
-          <div className="bg-white rounded-2xl shadow-md p-4">
-            <h3 className="text-sm font-bold text-gray-900 mb-3">Pay Breakdown</h3>
-            <div className="h-44 flex items-center justify-center">
-              <Pie data={pieChartData} options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "bottom", labels: { padding: 12, font: { size: 11 } } }, tooltip: { backgroundColor: "rgba(0,0,0,0.8)", padding: 10, callbacks: { label: (ctx) => `${ctx.label}: ${formatCurrency(ctx.parsed)}` } } } }} />
             </div>
           </div>
         )}
@@ -481,6 +451,10 @@ export function LabourDashboard() {
 
   // ===================== TAB: HISTORY =====================
   function renderHistory() {
+    const sorted = history ? [...history].sort((a, b) => new Date(b.date) - new Date(a.date)) : [];
+    const totalPay = sorted.reduce((s, r) => s + (r.total_pay || 0), 0);
+    const totalOT = sorted.reduce((s, r) => s + (r.ot_pay || 0), 0);
+
     return (
       <div className="space-y-4">
         {/* Period Filter */}
@@ -497,60 +471,56 @@ export function LabourDashboard() {
 
         {showCustomRange && (
           <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-semibold text-gray-600 mb-1">From</label>
-              <input type="date" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" value={customRange.start}
-                onChange={(e) => setCustomRange((r) => ({ ...r, start: e.target.value }))} />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-gray-600 mb-1">To</label>
-              <input type="date" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" value={customRange.end}
-                onChange={(e) => setCustomRange((r) => ({ ...r, end: e.target.value }))} />
-            </div>
+            <div><label className="block text-xs font-semibold text-gray-600 mb-1">From</label><input type="date" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" value={customRange.start} onChange={(e) => setCustomRange((r) => ({ ...r, start: e.target.value }))} /></div>
+            <div><label className="block text-xs font-semibold text-gray-600 mb-1">To</label><input type="date" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" value={customRange.end} onChange={(e) => setCustomRange((r) => ({ ...r, end: e.target.value }))} /></div>
           </div>
         )}
 
         {historyLoading ? (
           <div className="py-8"><LoadingSpinner label="Loading..." /></div>
-        ) : history && history.length > 0 ? (
+        ) : sorted.length > 0 ? (
           <>
-            {/* Line Chart */}
-            {lineChartData && (
-              <div className="bg-white rounded-2xl shadow-md p-4">
-                <h3 className="text-sm font-bold text-gray-900 mb-3">Earnings Trend</h3>
-                <div className="h-48">
-                  <Line data={lineChartData} options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { backgroundColor: "rgba(0,0,0,0.8)", padding: 10, callbacks: { label: (ctx) => `${formatCurrency(ctx.parsed.y)}` } } }, scales: { y: { beginAtZero: true, ticks: { callback: (v) => `${v}` } } } }} />
-                </div>
+            {/* Period Summary */}
+            <div className="bg-white rounded-2xl shadow-md p-4">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-bold text-gray-800">{sorted.length} Days</span>
+                <span className="text-lg font-black text-green-600">{formatCurrency(totalPay)}</span>
               </div>
-            )}
+              {totalOT > 0 && (
+                <div className="flex items-center gap-2 bg-orange-50 rounded-xl px-3 py-2">
+                  <span className="text-base">🔥</span>
+                  <span className="text-xs text-orange-700 font-semibold">OT earned: {formatCurrency(totalOT)}</span>
+                </div>
+              )}
+            </div>
 
-            {/* Records List */}
+            {/* Day-by-day Records */}
             <div className="space-y-2">
-              <h3 className="text-sm font-bold text-gray-900">Records ({history.length})</h3>
-              {[...history].sort((a, b) => new Date(b.date) - new Date(a.date)).map((record) => (
-                <div key={record.id} onClick={() => setSelectedRecord(record)} className="bg-white rounded-xl shadow-sm p-3 active:bg-gray-50 cursor-pointer transition-colors">
+              {sorted.map((record) => (
+                <div key={record.id} onClick={() => setSelectedRecord(record)} className="bg-white rounded-xl shadow-sm border border-gray-100 p-3.5 active:bg-gray-50 cursor-pointer">
                   <div className="flex items-center justify-between">
-                    <div className="min-w-0 flex-1">
+                    <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-bold text-gray-900">
                           {new Date(record.date).toLocaleDateString("en-GB", { day: "2-digit", month: "short", weekday: "short" })}
                         </span>
-                        {(record.is_sunday || record.is_holiday) && (
-                          <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full font-medium">
-                            {record.is_sunday ? "Sun" : "Holiday"}
-                          </span>
-                        )}
-                        {record.admin_verified && <span className="text-[10px] text-green-500">✓</span>}
+                        {(record.is_sunday || record.is_holiday) && <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full font-semibold">{record.is_sunday ? "Sun" : "Holiday"}</span>}
+                        {record.admin_verified && <span className="text-xs text-green-500">✅</span>}
                       </div>
-                      <div className="text-xs text-gray-500 mt-0.5 truncate">
-                        {record.client_name} • {record.hours_worked}h • {record.start_time}-{record.end_time}
-                      </div>
+                      <div className="text-[11px] text-gray-500 mt-0.5">{record.client_name} • {record.hours_worked}h • {record.start_time}-{record.end_time}</div>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0 ml-3">
-                      <span className="text-base font-bold text-green-600">{formatCurrency(record.total_pay)}</span>
-                      <svg className="w-4 h-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                    <div className="text-right shrink-0 ml-3">
+                      <p className="text-base font-bold text-green-600">{formatCurrency(record.total_pay)}</p>
+                      {record.ot_pay > 0 && <p className="text-[10px] font-semibold text-orange-500">+{formatCurrency(record.ot_pay)} OT 🔥</p>}
                     </div>
                   </div>
+                  {/* Mini OT bar if there's OT */}
+                  {record.ot_pay > 0 && record.total_pay > 0 && (
+                    <div className="mt-2 h-1.5 rounded-full bg-gray-100 overflow-hidden flex">
+                      <div style={{ width: `${Math.round((record.regular_pay / record.total_pay) * 100)}%` }} className="bg-blue-400 rounded-full" />
+                      <div style={{ width: `${Math.round((record.ot_pay / record.total_pay) * 100)}%` }} className="bg-orange-400 rounded-full" />
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -569,30 +539,26 @@ export function LabourDashboard() {
                     <button onClick={() => setSelectedRecord(null)} className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-gray-500 text-lg">×</button>
                   </div>
                   <div className="px-5 py-4 space-y-3">
-                    {/* Total */}
                     <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-center">
                       <div className="text-xs text-green-600 font-medium">Total Earnings</div>
                       <div className="text-2xl font-bold text-green-700">{formatCurrency(selectedRecord.total_pay)}</div>
                     </div>
-                    {/* Breakdown */}
                     <div className="grid grid-cols-2 gap-2">
                       <div className="bg-blue-50 border border-blue-100 rounded-lg p-2.5 text-center">
                         <div className="text-[10px] text-blue-500 font-medium">Regular Pay</div>
                         <div className="text-sm font-bold text-blue-700">{formatCurrency(selectedRecord.regular_pay)}</div>
                       </div>
-                      <div className="bg-amber-50 border border-amber-100 rounded-lg p-2.5 text-center">
-                        <div className="text-[10px] text-amber-500 font-medium">OT Pay</div>
-                        <div className="text-sm font-bold text-amber-700">{formatCurrency(selectedRecord.ot_pay)}</div>
+                      <div className="bg-orange-50 border border-orange-100 rounded-lg p-2.5 text-center">
+                        <div className="text-[10px] text-orange-500 font-medium">🔥 OT Pay</div>
+                        <div className="text-sm font-bold text-orange-600">{formatCurrency(selectedRecord.ot_pay)}</div>
                       </div>
                     </div>
-                    {/* Details */}
                     <div className="bg-gray-50 rounded-xl p-3 space-y-1.5 text-sm">
                       <div className="flex justify-between"><span className="text-gray-500">Shift</span><span className="font-medium">{selectedRecord.start_time} - {selectedRecord.end_time}</span></div>
-                      <div className="flex justify-between"><span className="text-gray-500">Hours Worked</span><span className="font-medium">{selectedRecord.hours_worked}h</span></div>
-                      <div className="flex justify-between"><span className="text-gray-500">Client</span><span className="font-medium">{selectedRecord.client_name}</span></div>
-                      {selectedRecord.is_sunday && <div className="flex justify-between"><span className="text-gray-500">Day Type</span><span className="font-medium text-purple-600">Sunday (1.5x OT)</span></div>}
-                      {selectedRecord.is_holiday && <div className="flex justify-between"><span className="text-gray-500">Day Type</span><span className="font-medium text-purple-600">Holiday</span></div>}
-                      <div className="flex justify-between"><span className="text-gray-500">Status</span><span className={`font-medium ${selectedRecord.admin_verified ? "text-green-600" : "text-amber-500"}`}>{selectedRecord.admin_verified ? "✓ Verified" : "⏳ Pending"}</span></div>
+                      <div className="flex justify-between"><span className="text-gray-500">Hours</span><span className="font-medium">{selectedRecord.hours_worked}h</span></div>
+                      {selectedRecord.is_sunday && <div className="flex justify-between"><span className="text-gray-500">Type</span><span className="font-medium text-purple-600">☀️ Sunday (1.5x OT)</span></div>}
+                      {selectedRecord.is_holiday && <div className="flex justify-between"><span className="text-gray-500">Type</span><span className="font-medium text-purple-600">🎉 Holiday</span></div>}
+                      <div className="flex justify-between"><span className="text-gray-500">Status</span><span className={`font-medium ${selectedRecord.admin_verified ? "text-green-600" : "text-amber-500"}`}>{selectedRecord.admin_verified ? "✅ Verified" : "⏳ Pending"}</span></div>
                     </div>
                   </div>
                 </div>

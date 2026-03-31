@@ -8,8 +8,6 @@ export function ConfigManagement() {
   const [saving, setSaving] = useState(false);
   const [formData, setFormData] = useState({
     regular_hours: "",
-    helper_ot_rate: "",
-    non_helper_ot_rate: "",
     sunday_ot_multiplier: "",
   });
 
@@ -22,8 +20,6 @@ export function ConfigManagement() {
       setConfig(res.data);
       setFormData({
         regular_hours: res.data.regular_hours?.value || "10",
-        helper_ot_rate: res.data.helper_ot_rate?.value || "3",
-        non_helper_ot_rate: res.data.non_helper_ot_rate?.value || "4",
         sunday_ot_multiplier: res.data.sunday_ot_multiplier?.value || "1.5",
       });
     } catch (err) {
@@ -40,12 +36,14 @@ export function ConfigManagement() {
       await loadConfig();
       alert("Configuration updated successfully!");
     } catch (err) {
-      console.error("Error updating config:", err);
       alert(err.response?.data?.message || "Failed to update configuration");
     } finally { setSaving(false); }
   }
 
   if (loading) return <LoadingSpinner label="Loading configuration..." />;
+
+  const stdHours = parseFloat(formData.regular_hours || "10");
+  const sunMult = parseFloat(formData.sunday_ot_multiplier || "1.5");
 
   return (
     <div className="space-y-6">
@@ -54,7 +52,7 @@ export function ConfigManagement() {
         <p className="text-sm text-gray-500">Configure wage calculation rules</p>
       </div>
 
-      <div className="bg-yellow-50 border border-yellow-200 rounded-md p-4 text-sm">
+      <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 text-sm">
         <p className="font-medium text-yellow-900">⚠️ Important:</p>
         <p className="text-yellow-700 mt-1">
           Changes to these settings will affect all future attendance calculations.
@@ -62,53 +60,46 @@ export function ConfigManagement() {
         </p>
       </div>
 
-      <form onSubmit={handleSubmit} className="bg-white rounded-lg shadow p-6 space-y-6">
+      <form onSubmit={handleSubmit} className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 space-y-6">
         <div className="grid md:grid-cols-2 gap-6">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Standard Working Hours per Day</label>
             <input type="number" step="0.5" min="1" max="24" required value={formData.regular_hours}
               onChange={(e) => setFormData({ ...formData, regular_hours: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm" />
+              className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm" />
             <p className="text-xs text-gray-500 mt-1">Current: {config.regular_hours?.value || "10"} hours</p>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Helper OT Rate (AED/hr)</label>
-            <input type="number" step="0.5" min="0" max="50" required value={formData.helper_ot_rate}
-              onChange={(e) => setFormData({ ...formData, helper_ot_rate: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm" />
-            <p className="text-xs text-gray-500 mt-1">Current: AED {config.helper_ot_rate?.value || "3"}/hr — Fixed overtime rate for Helper designation</p>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Non-Helper OT Rate (AED/hr)</label>
-            <input type="number" step="0.5" min="0" max="50" required value={formData.non_helper_ot_rate}
-              onChange={(e) => setFormData({ ...formData, non_helper_ot_rate: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm" />
-            <p className="text-xs text-gray-500 mt-1">Current: AED {config.non_helper_ot_rate?.value || "4"}/hr — Fixed overtime rate for Mason, Carpenter, etc.</p>
           </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Sunday/Holiday OT Multiplier</label>
             <input type="number" step="0.1" min="1" max="5" required value={formData.sunday_ot_multiplier}
               onChange={(e) => setFormData({ ...formData, sunday_ot_multiplier: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm" />
+              className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm" />
             <p className="text-xs text-gray-500 mt-1">Current: {config.sunday_ot_multiplier?.value || "1.5"}× — Sunday rate = OT Rate × this multiplier</p>
           </div>
         </div>
 
-        <div className="bg-gray-50 border border-gray-200 rounded-md p-4 text-sm">
-          <p className="font-medium text-gray-900 mb-2">💡 Rate Summary (based on current settings):</p>
-          <div className="space-y-1 text-gray-700">
-            <p>• <strong>Standard Rate</strong> = Monthly Salary ÷ Days in Month ÷ {formData.regular_hours || "10"}h</p>
-            <p>• <strong>OT Rate</strong> = Helper: AED {formData.helper_ot_rate || "3"}/hr | Non-Helper: AED {formData.non_helper_ot_rate || "4"}/hr</p>
-            <p>• <strong>Sunday/Holiday Rate</strong> = OT Rate × {formData.sunday_ot_multiplier || "1.5"} → Helper: AED {(parseFloat(formData.helper_ot_rate || "3") * parseFloat(formData.sunday_ot_multiplier || "1.5")).toFixed(2)}/hr | Non-Helper: AED {(parseFloat(formData.non_helper_ot_rate || "4") * parseFloat(formData.sunday_ot_multiplier || "1.5")).toFixed(2)}/hr</p>
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-sm">
+          <p className="font-semibold text-blue-900 mb-3">💡 Payment Formula Summary</p>
+          <div className="space-y-2 text-blue-800">
+            <p><strong>Standard Rate</strong> = Monthly Salary ÷ Days in Month ÷ {stdHours}h</p>
+            <p><strong>OT Rate</strong> = Monthly Salary ÷ 30 ÷ 10</p>
+            <p><strong>Sunday/Holiday OT Rate</strong> = OT Rate × {sunMult}</p>
           </div>
+          <div className="mt-3 pt-3 border-t border-blue-200 space-y-1 text-blue-700 text-xs">
+            <p>Example (Salary AED 1,500): OT = 1500÷30÷10 = <strong>AED 5.00/hr</strong> → Sunday OT = 5.00 × {sunMult} = <strong>AED {(5 * sunMult).toFixed(2)}/hr</strong></p>
+            <p>Example (Salary AED 1,200): OT = 1200÷30÷10 = <strong>AED 4.00/hr</strong> → Sunday OT = 4.00 × {sunMult} = <strong>AED {(4 * sunMult).toFixed(2)}/hr</strong></p>
+          </div>
+        </div>
+
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-sm">
+          <p className="font-semibold text-emerald-900 mb-2">📅 Sunday/Holiday Auto-Pay</p>
+          <p className="text-emerald-700">Every Sunday and holiday automatically includes base daily pay (Salary ÷ Days in Month) in the monthly total, even if the labour did not mark attendance. If they did work on Sunday, all worked hours are treated as overtime.</p>
         </div>
 
         <div className="flex justify-end">
           <button type="submit" disabled={saving}
-            className="px-6 py-2 bg-blue-500 text-white rounded-md text-sm font-medium hover:bg-blue-600 disabled:opacity-50">
+            className="px-6 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-semibold hover:bg-blue-700 disabled:opacity-50">
             {saving ? "Saving..." : "Save Configuration"}
           </button>
         </div>
