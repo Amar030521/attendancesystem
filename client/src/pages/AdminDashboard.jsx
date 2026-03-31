@@ -1,7 +1,6 @@
 import React, { useEffect, useState, useMemo } from "react";
 import { LoadingSpinner } from "../components/LoadingSpinner";
 import { Pagination } from "../components/Pagination";
-import { Pagination } from "../components/Pagination";
 import { LabourManagement } from "../components/LabourManagement";
 import { ClientManagement } from "../components/ClientManagement";
 import { SiteManagement } from "../components/SiteManagement";
