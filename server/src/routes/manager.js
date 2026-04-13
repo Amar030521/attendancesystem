@@ -62,10 +62,10 @@ router.get("/attendance", async (req, res) => {
     const { date } = req.query;
     if (!date) return res.status(400).json({ message: "date required" });
     const { data } = await supabase.from("attendance")
-      .select("*, users(name, designation), clients(name), sites(name)")
+      .select("*, users(name, designation, photo_url), clients(name), sites(name)")
       .eq("date", date).order("labour_id");
     const rows = (data || []).map(a => ({
-      ...a, labour_name: a.users?.name, labour_designation: a.users?.designation,
+      ...a, labour_name: a.users?.name, labour_designation: a.users?.designation, photo_url: a.users?.photo_url,
       client_name: a.clients?.name, site_name: a.sites?.name,
       users: undefined, clients: undefined, sites: undefined,
     }));
@@ -105,7 +105,7 @@ router.get("/present-absent", async (req, res) => {
     if (!date) return res.status(400).json({ message: "date required" });
     const today = uaeToday();
     const yesterday = uaeYesterday();
-    const { data: labours } = await supabase.from("users").select("id, name, phone, daily_wage, designation").eq("role", "labour").eq("status", "active").order("id");
+    const { data: labours } = await supabase.from("users").select("id, name, phone, daily_wage, designation, photo_url").eq("role", "labour").eq("status", "active").order("id");
     const { data: attendance } = await supabase.from("attendance").select("id, labour_id, start_time, end_time, hours_worked, total_pay, regular_pay, ot_pay, admin_verified, clients(name), sites(name)").eq("date", date);
     const attMap = {}; (attendance || []).forEach(a => { attMap[a.labour_id] = { ...a, client_name: a.clients?.name, site_name: a.sites?.name, clients: undefined, sites: undefined }; });
     const uae = uaeNow();
@@ -114,7 +114,7 @@ router.get("/present-absent", async (req, res) => {
     const result = (labours || []).map(l => {
       const att = attMap[l.id]; let status = "pending";
       if (att) status = "present"; else if (autoAbsent || date < yesterday) status = "absent";
-      return { labour_id: l.id, name: l.name, phone: l.phone, designation: l.designation, daily_wage: l.daily_wage, status, attendance: att || null };
+      return { labour_id: l.id, name: l.name, phone: l.phone, designation: l.designation, photo_url: l.photo_url || null, daily_wage: l.daily_wage, status, attendance: att || null };
     });
     const s = { total: result.length, present: result.filter(r => r.status === "present").length, absent: result.filter(r => r.status === "absent").length, pending: result.filter(r => r.status === "pending").length };
     res.json({ date, isAutoAbsent: autoAbsent, cutoffNote: autoAbsent ? "Past 16:30 — unlisted labours marked absent" : null, summary: s, labours: result });
@@ -153,7 +153,7 @@ router.get("/reports/daily", async (req, res) => {
   try {
     const { date, format, client_id, site_ids } = req.query;
     if (!date) return res.status(400).json({ message: "date required" });
-    let q = supabase.from("attendance").select("*, users(name, designation), clients(name), sites(name)").eq("date", date);
+    let q = supabase.from("attendance").select("*, users(name, designation, photo_url), clients(name), sites(name)").eq("date", date);
     if (client_id) q = q.eq("client_id", client_id);
     if (site_ids) q = q.in("site_id", site_ids.split(",").map(Number));
     const { data } = await q.order("labour_id");
@@ -179,7 +179,7 @@ router.get("/reports/monthly", async (req, res) => {
     const { month, format } = req.query; if (!month) return res.status(400).json({ message: "month required" });
     const { data: cfgRows } = await supabase.from("config").select("key, value");
     const config = {}; (cfgRows || []).forEach(r => { config[r.key] = r.value; });
-    const { data } = await supabase.from("attendance").select("*, users(name, designation), clients(name), sites(name)").gte("date", `${month}-01`).lt("date", nextMonthStart(month)).order("date").order("labour_id");
+    const { data } = await supabase.from("attendance").select("*, users(name, designation, photo_url), clients(name), sites(name)").gte("date", `${month}-01`).lt("date", nextMonthStart(month)).order("date").order("labour_id");
     const rows = (data || []).map(a => ({ ...a, labour_name: a.users?.name, designation: a.users?.designation, client_name: a.clients?.name, site_name: a.sites?.name }));
     const { data: labours } = await supabase.from("users").select("id, name, daily_wage, designation").eq("role", "labour").eq("status", "active");
     const { data: holidays } = await supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month));

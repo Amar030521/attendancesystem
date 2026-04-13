@@ -45,7 +45,7 @@ async function recalcPay(labour_id, start_time, end_time, date) {
 // Helper: resolve user/client/site names for attendance rows (FK-independent)
 async function enrichRows(rows) {
   if (!rows || !rows.length) return [];
-  const { data: users } = await supabase.from("users").select("id, name, designation");
+  const { data: users } = await supabase.from("users").select("id, name, designation, photo_url");
   const { data: clients } = await supabase.from("clients").select("id, name");
   const { data: sites } = await supabase.from("sites").select("id, name, client_id");
   const uMap = {}; (users || []).forEach(u => { uMap[u.id] = u; });
@@ -55,6 +55,7 @@ async function enrichRows(rows) {
     ...a,
     labour_name: uMap[a.labour_id]?.name || "Unknown",
     designation: uMap[a.labour_id]?.designation || null,
+    photo_url: uMap[a.labour_id]?.photo_url || null,
     client_name: cMap[a.client_id]?.name || "Unknown",
     site_name: sMap[a.site_id]?.name || "Unknown",
     users: undefined, clients: undefined, sites: undefined,
@@ -169,7 +170,7 @@ router.get("/present-absent", async (req, res) => {
     const yesterday = uaeYesterday();
 
     const { data: labours } = await supabase.from("users")
-      .select("id, name, phone, daily_wage, designation")
+      .select("id, name, phone, daily_wage, designation, photo_url")
       .eq("role", "labour").eq("status", "active").order("id");
 
     const { data: attendance } = await supabase.from("attendance")
@@ -189,7 +190,7 @@ router.get("/present-absent", async (req, res) => {
       let status = "pending";
       if (att) status = "present";
       else if (autoAbsent || date < yesterday) status = "absent";
-      return { labour_id: l.id, name: l.name, phone: l.phone, designation: l.designation, daily_wage: l.daily_wage, status, attendance: att || null };
+      return { labour_id: l.id, name: l.name, phone: l.phone, designation: l.designation, photo_url: l.photo_url || null, daily_wage: l.daily_wage, status, attendance: att || null };
     });
 
     const s = { total: result.length, present: result.filter(r => r.status === "present").length, absent: result.filter(r => r.status === "absent").length, pending: result.filter(r => r.status === "pending").length };
@@ -381,7 +382,7 @@ router.get("/reports/payroll", async (req, res) => {
 
 router.get("/labours", async (_req, res) => {
   try {
-    const { data } = await supabase.from("users").select("id, username, name, daily_wage, phone, designation, passport_id, date_of_joining, status, role, pin").eq("role", "labour").order("id");
+    const { data } = await supabase.from("users").select("id, username, name, daily_wage, phone, designation, passport_id, date_of_joining, status, role, pin, photo_url").eq("role", "labour").order("id");
     return res.json(data || []);
   } catch (err) { return res.status(500).json({ message: "Internal server error" }); }
 });
@@ -429,8 +430,20 @@ router.delete("/labours/:id", async (req, res) => {
 });
 
 router.delete("/labours/:id/permanent", async (req, res) => {
-  try { await supabase.from("attendance").delete().eq("labour_id", req.params.id); await supabase.from("users").delete().eq("id", req.params.id); return res.json({ message: "Deleted" }); }
-  catch (err) { return res.status(500).json({ message: "Internal server error" }); }
+  try {
+    // Try to delete photo from storage (ignore errors if it doesn't exist)
+    try {
+      const { data: list } = await supabase.storage.from("labour-photos").list("", { search: String(req.params.id) });
+      if (list && list.length > 0) {
+        const filesToRemove = list.filter(f => f.name.startsWith(`${req.params.id}.`)).map(f => f.name);
+        if (filesToRemove.length > 0) await supabase.storage.from("labour-photos").remove(filesToRemove);
+      }
+    } catch (e) { /* photo may not exist, ignore */ }
+    await supabase.from("attendance").delete().eq("labour_id", req.params.id);
+    await supabase.from("advance_payments").delete().eq("labour_id", req.params.id);
+    await supabase.from("users").delete().eq("id", req.params.id);
+    return res.json({ message: "Deleted" });
+  } catch (err) { console.error(err); return res.status(500).json({ message: "Internal server error" }); }
 });
 
 router.put("/labours/:id/activate", async (req, res) => {
@@ -441,6 +454,60 @@ router.put("/labours/:id/activate", async (req, res) => {
 router.post("/labours/:id/reset-pin", async (req, res) => {
   try { const p = generateRandomPin(); await supabase.from("users").update({ pin: await bcrypt.hash(p, 10) }).eq("id", req.params.id); return res.json({ id: req.params.id, newPin: p }); }
   catch (err) { return res.status(500).json({ message: "Internal server error" }); }
+});
+
+// ===== Labour Photo Upload =====
+// Upload/replace photo for a labour. Stores in Supabase Storage bucket "labour-photos".
+// Filename: {labour_id}.{ext}. Always upserts (replaces previous photo).
+router.post("/labours/:id/photo", upload.single("photo"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ message: "Photo file required" });
+    const allowedTypes = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+    if (!allowedTypes.includes(req.file.mimetype)) {
+      return res.status(400).json({ message: "Only JPG, PNG, WebP images allowed" });
+    }
+    if (req.file.size > 2 * 1024 * 1024) {
+      return res.status(400).json({ message: "Photo must be under 2 MB" });
+    }
+    // Determine extension from mimetype
+    const extMap = { "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png", "image/webp": "webp" };
+    const ext = extMap[req.file.mimetype] || "jpg";
+    const filename = `${req.params.id}.${ext}`;
+
+    // Remove any existing photo with different extension first
+    try {
+      const allExts = ["jpg", "png", "webp"];
+      const oldFiles = allExts.filter(e => e !== ext).map(e => `${req.params.id}.${e}`);
+      await supabase.storage.from("labour-photos").remove(oldFiles);
+    } catch (e) { /* ignore */ }
+
+    const { error: upErr } = await supabase.storage
+      .from("labour-photos")
+      .upload(filename, req.file.buffer, {
+        upsert: true,
+        contentType: req.file.mimetype,
+        cacheControl: "3600",
+      });
+    if (upErr) { console.error("Upload error:", upErr); return res.status(500).json({ message: "Upload failed: " + upErr.message }); }
+
+    const { data: { publicUrl } } = supabase.storage.from("labour-photos").getPublicUrl(filename);
+    // Append timestamp to bust browser cache after photo update
+    const cacheBustedUrl = `${publicUrl}?t=${Date.now()}`;
+
+    await supabase.from("users").update({ photo_url: cacheBustedUrl }).eq("id", req.params.id);
+    return res.json({ photo_url: cacheBustedUrl });
+  } catch (err) { console.error(err); return res.status(500).json({ message: "Internal server error" }); }
+});
+
+// Delete photo for a labour
+router.delete("/labours/:id/photo", async (req, res) => {
+  try {
+    const allExts = ["jpg", "png", "webp"];
+    const filesToRemove = allExts.map(e => `${req.params.id}.${e}`);
+    await supabase.storage.from("labour-photos").remove(filesToRemove);
+    await supabase.from("users").update({ photo_url: null }).eq("id", req.params.id);
+    return res.json({ message: "Photo removed" });
+  } catch (err) { console.error(err); return res.status(500).json({ message: "Internal server error" }); }
 });
 
 router.post("/labours/import", upload.single("file"), async (req, res) => {

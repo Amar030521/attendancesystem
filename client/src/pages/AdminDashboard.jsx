@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from "react";
 import { LoadingSpinner } from "../components/LoadingSpinner";
 import { Pagination } from "../components/Pagination";
-import { LabourManagement } from "../components/LabourManagement";
+import { LabourManagement, Avatar } from "../components/LabourManagement";
 import { ClientManagement } from "../components/ClientManagement";
 import { SiteManagement } from "../components/SiteManagement";
 import { HolidayManagement } from "../components/HolidayManagement";
@@ -285,9 +285,12 @@ export function AdminDashboard() {
           <div className="md:hidden divide-y divide-gray-100">
             {filteredRows.length === 0 ? <p className="p-6 text-center text-gray-400">No records for this date</p> : filteredRows.map(row => (
               <div key={row.id} className="p-3 space-y-1">
-                <div className="flex justify-between items-start">
-                  <div><p className="font-semibold text-gray-900 text-sm">{row.labour_name || row.users?.name}</p>{(row.designation || row.labour_designation) && <p className="text-[10px] text-gray-400 italic">{row.designation || row.labour_designation}</p>}<p className="text-xs text-gray-500">{row.client_name || row.clients?.name} • {row.site_name || row.sites?.name}</p></div>
-                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${row.admin_verified ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-700"}`}>{row.admin_verified ? "✓" : "Pending"}</span>
+                <div className="flex justify-between items-start gap-3">
+                  <div className="flex items-start gap-2.5 flex-1 min-w-0">
+                    <Avatar name={row.labour_name || row.users?.name} photoUrl={row.photo_url} size="sm" />
+                    <div className="min-w-0"><p className="font-semibold text-gray-900 text-sm">{row.labour_name || row.users?.name}</p>{(row.designation || row.labour_designation) && <p className="text-[10px] text-gray-400 italic">{row.designation || row.labour_designation}</p>}<p className="text-xs text-gray-500">{row.client_name || row.clients?.name} • {row.site_name || row.sites?.name}</p></div>
+                  </div>
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium shrink-0 ${row.admin_verified ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-700"}`}>{row.admin_verified ? "✓" : "Pending"}</span>
                 </div>
                 <div className="flex items-center justify-between pt-1.5 border-t border-gray-100">
                   <div className="text-xs text-gray-500">{row.start_time}-{row.end_time} • R:{formatCurrency(row.regular_pay)} OT:{formatCurrency(row.ot_pay)}</div>
@@ -315,7 +318,7 @@ export function AdminDashboard() {
               <tbody className="divide-y divide-gray-50">
                 {filteredRows.length === 0 ? <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">No records</td></tr> : filteredRows.map(row => (
                   <tr key={row.id} className="hover:bg-gray-50/50">
-                    <td className="px-4 py-3 font-medium text-gray-900">{row.labour_name || row.users?.name}{(row.designation || row.labour_designation) && <><br /><span className="text-[11px] text-gray-400 italic font-normal">{row.designation || row.labour_designation}</span></>}</td>
+                    <td className="px-4 py-3 font-medium text-gray-900"><div className="flex items-center gap-2.5"><Avatar name={row.labour_name || row.users?.name} photoUrl={row.photo_url} size="sm" /><div>{row.labour_name || row.users?.name}{(row.designation || row.labour_designation) && <><br /><span className="text-[11px] text-gray-400 italic font-normal">{row.designation || row.labour_designation}</span></>}</div></div></td>
                     <td className="px-4 py-3 text-gray-600"><span className="font-medium">{row.client_name || row.clients?.name}</span><br /><span className="text-xs text-gray-400">{row.site_name || row.sites?.name}</span></td>
                     <td className="px-4 py-3 text-gray-600">{row.start_time} - {row.end_time}</td>
                     <td className="px-4 py-3 text-gray-600">{row.hours_worked}h</td>
@@ -383,9 +386,13 @@ export function AdminDashboard() {
           <div className="md:hidden divide-y divide-gray-100">{paPaged.map(l => (
             <div key={l.labour_id} className={`p-3 border-l-4 ${l.status === "present" ? "border-green-500" : l.status === "absent" ? "border-red-400" : "border-amber-400"}`}>
               <div className="flex items-center justify-between">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2"><span className="text-sm font-bold text-gray-900 truncate">{l.name}</span><span className="text-[10px] text-gray-400 shrink-0">#{l.labour_id}</span></div>
-                  {l.status === "present" && l.attendance ? <div className="text-xs text-gray-500 mt-0.5 truncate">{l.attendance.client_name} • {l.attendance.start_time}-{l.attendance.end_time} • {l.attendance.hours_worked}h • {formatCurrency(l.attendance.total_pay)}</div> : l.status === "absent" ? <div className="text-xs text-red-400 mt-0.5">Did not check in</div> : <div className="text-xs text-amber-500 mt-0.5">Waiting...</div>}
+                <div className="flex items-start gap-2.5 flex-1 min-w-0">
+                  <Avatar name={l.name} photoUrl={l.photo_url} size="sm" />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2"><span className="text-sm font-bold text-gray-900 truncate">{l.name}</span><span className="text-[10px] text-gray-400 shrink-0">#{l.labour_id}</span></div>
+                    {l.designation && <div className="text-[10px] text-gray-400 italic">{l.designation}</div>}
+                    {l.status === "present" && l.attendance ? <div className="text-xs text-gray-500 mt-0.5 truncate">{l.attendance.client_name} • {l.attendance.start_time}-{l.attendance.end_time} • {l.attendance.hours_worked}h • {formatCurrency(l.attendance.total_pay)}</div> : l.status === "absent" ? <div className="text-xs text-red-400 mt-0.5">Did not check in</div> : <div className="text-xs text-amber-500 mt-0.5">Waiting...</div>}
+                  </div>
                 </div>
                 <div className="flex items-center gap-2 ml-3 shrink-0">
                   <span className={`w-2 h-2 rounded-full ${l.status === "present" ? "bg-green-500" : l.status === "absent" ? "bg-red-500" : "bg-amber-400"}`}></span>
@@ -404,7 +411,7 @@ export function AdminDashboard() {
           </tr></thead><tbody className="divide-y divide-gray-100">{paPaged.map(l => (
             <tr key={l.labour_id} className="hover:bg-gray-50">
               <td className="px-3 py-2.5 font-medium">{l.labour_id}</td>
-              <td className="px-3 py-2.5">{l.name}</td>
+              <td className="px-3 py-2.5"><div className="flex items-center gap-2.5"><Avatar name={l.name} photoUrl={l.photo_url} size="sm" /><div>{l.name}{l.designation && <><br /><span className="text-[11px] text-gray-400 italic font-normal">{l.designation}</span></>}</div></div></td>
               <td className="px-3 py-2.5 text-center">
                 {l.status === "present" && <span className="px-2 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-800">✓ Present</span>}
                 {l.status === "absent" && <span className="px-2 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-800">✗ Absent</span>}
