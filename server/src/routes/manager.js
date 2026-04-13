@@ -180,8 +180,8 @@ router.get("/reports/monthly", async (req, res) => {
     const { data: cfgRows } = await supabase.from("config").select("key, value");
     const config = {}; (cfgRows || []).forEach(r => { config[r.key] = r.value; });
     const { data } = await supabase.from("attendance").select("*, users(name, designation), clients(name), sites(name)").gte("date", `${month}-01`).lt("date", nextMonthStart(month)).order("date").order("labour_id");
-    const rows = (data || []).map(a => ({ ...a, labour_name: a.users?.name, client_name: a.clients?.name, site_name: a.sites?.name }));
-    const { data: labours } = await supabase.from("users").select("id, name, daily_wage").eq("role", "labour").eq("status", "active");
+    const rows = (data || []).map(a => ({ ...a, labour_name: a.users?.name, designation: a.users?.designation, client_name: a.clients?.name, site_name: a.sites?.name }));
+    const { data: labours } = await supabase.from("users").select("id, name, daily_wage, designation").eq("role", "labour").eq("status", "active");
     const { data: holidays } = await supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
     const holidayDates = (holidays || []).map(h => h.date);
     const attByLabour = {};
@@ -190,7 +190,7 @@ router.get("/reports/monthly", async (req, res) => {
     (labours || []).forEach(l => {
       const attendanceDates = attByLabour[l.id] || [];
       const { autoPay } = calcSundayAutoPayForMonth(month, l.daily_wage, attendanceDates, holidayDates, config);
-      if (autoPay > 0) { sundayAutoPayMap[l.id] = autoPay; sundayAutoPayMap[l.id + "_name"] = l.name; }
+      if (autoPay > 0) { sundayAutoPayMap[l.id] = autoPay; sundayAutoPayMap[l.id + "_name"] = l.name; sundayAutoPayMap[l.id + "_designation"] = l.designation || ""; }
     });
     if (format === "xlsx") { const buf = generateMonthlyExcelReport(month, rows, sundayAutoPayMap); res.setHeader("Content-Disposition", `attachment; filename="Monthly_${month}.xlsx"`); res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"); return res.send(Buffer.from(buf)); }
     res.json(rows);
@@ -202,7 +202,7 @@ router.get("/reports/payroll", async (req, res) => {
     const { month, format } = req.query; if (!month) return res.status(400).json({ message: "month required" });
     const { data: cfgRows } = await supabase.from("config").select("key, value");
     const config = {}; (cfgRows || []).forEach(r => { config[r.key] = r.value; });
-    const { data: labours } = await supabase.from("users").select("id, name, daily_wage").eq("role", "labour").eq("status", "active").order("id");
+    const { data: labours } = await supabase.from("users").select("id, name, daily_wage, designation").eq("role", "labour").eq("status", "active").order("id");
     const { data: attendance } = await supabase.from("attendance").select("*").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
     const { data: holidays } = await supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
     const holidayDates = (holidays || []).map(h => h.date);
@@ -215,7 +215,7 @@ router.get("/reports/payroll", async (req, res) => {
       let autoPay = 0;
       for (const ds of allSH) { if (!attendedSet.has(ds)) autoPay += calculateSundayAutoPay(l.daily_wage, ds, config); }
       autoPay = Math.round(autoPay * 100) / 100;
-      return { labour_id: l.id, labour_name: l.name, daily_wage: l.daily_wage, days_worked: recs.length, total_hours: recs.reduce((s, r) => s + (r.hours_worked || 0), 0), total_regular: recs.reduce((s, r) => s + (r.regular_pay || 0), 0) + autoPay, total_ot: recs.reduce((s, r) => s + (r.ot_pay || 0), 0), total_pay: recs.reduce((s, r) => s + (r.total_pay || 0), 0) + autoPay, sunday_days: recs.filter(r => r.is_sunday).length, holiday_days: recs.filter(r => r.is_holiday).length };
+      return { labour_id: l.id, labour_name: l.name, designation: l.designation || "", daily_wage: l.daily_wage, days_worked: recs.length, total_hours: recs.reduce((s, r) => s + (r.hours_worked || 0), 0), total_regular: recs.reduce((s, r) => s + (r.regular_pay || 0), 0) + autoPay, total_ot: recs.reduce((s, r) => s + (r.ot_pay || 0), 0), total_pay: recs.reduce((s, r) => s + (r.total_pay || 0), 0) + autoPay, sunday_days: recs.filter(r => r.is_sunday).length, holiday_days: recs.filter(r => r.is_holiday).length };
     });
     if (format === "xlsx") { const buf = generatePayrollExcelReport(month, rows); res.setHeader("Content-Disposition", `attachment; filename="Payroll_${month}.xlsx"`); res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"); return res.send(Buffer.from(buf)); }
     res.json(rows);
@@ -229,7 +229,7 @@ router.get("/reports/labour/:id", async (req, res) => {
     const config = {}; (cfgRows || []).forEach(r => { config[r.key] = r.value; });
     const { data } = await supabase.from("attendance").select("*, clients(name), sites(name)").eq("labour_id", id).gte("date", `${month}-01`).lt("date", nextMonthStart(month)).order("date");
     const rows = (data || []).map(a => ({ ...a, client_name: a.clients?.name, site_name: a.sites?.name }));
-    const { data: user } = await supabase.from("users").select("id, name, daily_wage").eq("id", id).single();
+    const { data: user } = await supabase.from("users").select("id, name, daily_wage, designation").eq("id", id).single();
     const { data: holidays } = await supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
     const holidayDates = (holidays || []).map(h => h.date);
     const attendanceDates = rows.map(r => r.date);
@@ -242,8 +242,8 @@ router.get("/reports/labour/:id", async (req, res) => {
 router.get("/reports/client/:id", async (req, res) => {
   try {
     const { start, end, format } = req.query; const { id } = req.params;
-    const { data } = await supabase.from("attendance").select("*, users(name), sites(name)").eq("client_id", id).gte("date", start).lte("date", end).order("date");
-    const rows = (data || []).map(a => ({ ...a, labour_name: a.users?.name, site_name: a.sites?.name }));
+    const { data } = await supabase.from("attendance").select("*, users(name, designation), sites(name)").eq("client_id", id).gte("date", start).lte("date", end).order("date");
+    const rows = (data || []).map(a => ({ ...a, labour_name: a.users?.name, designation: a.users?.designation, site_name: a.sites?.name }));
     const { data: client } = await supabase.from("clients").select("name").eq("id", id).single();
     if (format === "xlsx") { const buf = generateClientExcelReport(start, end, client?.name || id, rows); res.setHeader("Content-Disposition", `attachment; filename="Client_${id}.xlsx"`); res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"); return res.send(Buffer.from(buf)); }
     res.json(rows);
@@ -253,8 +253,8 @@ router.get("/reports/client/:id", async (req, res) => {
 router.get("/reports/site/:id", async (req, res) => {
   try {
     const { start, end, format } = req.query; const { id } = req.params;
-    const { data } = await supabase.from("attendance").select("*, users(name), clients(name)").eq("site_id", id).gte("date", start).lte("date", end).order("date");
-    const rows = (data || []).map(a => ({ ...a, labour_name: a.users?.name, client_name: a.clients?.name }));
+    const { data } = await supabase.from("attendance").select("*, users(name, designation), clients(name)").eq("site_id", id).gte("date", start).lte("date", end).order("date");
+    const rows = (data || []).map(a => ({ ...a, labour_name: a.users?.name, designation: a.users?.designation, client_name: a.clients?.name }));
     const { data: site } = await supabase.from("sites").select("name").eq("id", id).single();
     if (format === "xlsx") { const buf = generateSiteExcelReport(start, end, site?.name || id, rows); res.setHeader("Content-Disposition", `attachment; filename="Site_${id}.xlsx"`); res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"); return res.send(Buffer.from(buf)); }
     res.json(rows);

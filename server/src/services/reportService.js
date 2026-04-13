@@ -16,12 +16,12 @@ function workbookToBuffer(wb) {
 // ===== Daily Report =====
 function generateDailyExcelReport(date, rows) {
   const data = [["DAILY LABOUR REPORT"], [`Date: ${formatDate(date)}`], [],
-    ["Labour ID", "Name", "Client", "Site", "Start", "End", "Hours", "Regular (AED)", "OT (AED)", "Total (AED)"]];
+    ["Labour ID", "Name", "Designation", "Client", "Site", "Start", "End", "Hours", "Regular (AED)", "OT (AED)", "Total (AED)"]];
   let total = 0;
-  rows.forEach(r => { total += r.total_pay || 0; data.push([r.labour_id, r.labour_name, r.client_name, r.site_name, r.start_time, r.end_time, r.hours_worked, Math.round((r.regular_pay || 0) * 100) / 100, Math.round((r.ot_pay || 0) * 100) / 100, Math.round((r.total_pay || 0) * 100) / 100]); });
-  data.push([], ["", "", "", "", "", "", "TOTAL", "", "", Math.round(total * 100) / 100]);
+  rows.forEach(r => { total += r.total_pay || 0; data.push([r.labour_id, r.labour_name, r.designation || "", r.client_name, r.site_name, r.start_time, r.end_time, r.hours_worked, Math.round((r.regular_pay || 0) * 100) / 100, Math.round((r.ot_pay || 0) * 100) / 100, Math.round((r.total_pay || 0) * 100) / 100]); });
+  data.push([], ["", "", "", "", "", "", "", "TOTAL", "", "", Math.round(total * 100) / 100]);
   const ws = XLSX.utils.aoa_to_sheet(data);
-  ws["!cols"] = [{ wch: 10 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
+  ws["!cols"] = [{ wch: 10 }, { wch: 20 }, { wch: 16 }, { wch: 20 }, { wch: 20 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Daily Report"); return workbookToBuffer(wb);
 }
 
@@ -31,9 +31,9 @@ function generateDailyPdfReport(date, rows) {
   doc.on("data", c => chunks.push(c));
   doc.fontSize(16).text("DAILY LABOUR REPORT", { align: "center" });
   doc.moveDown(0.5); doc.fontSize(12).text(`Date: ${formatDate(date)}`, { align: "center" }); doc.moveDown(1);
-  doc.fontSize(9); doc.text("ID | Name | Client | Site | Start | End | Hours | Regular | OT | Total"); doc.moveDown(0.3);
+  doc.fontSize(9); doc.text("ID | Name | Designation | Client | Site | Start | End | Hours | Regular | OT | Total"); doc.moveDown(0.3);
   let total = 0;
-  rows.forEach(r => { total += r.total_pay || 0; doc.text(`${r.labour_id} | ${r.labour_name} | ${r.client_name} | ${r.site_name} | ${r.start_time} | ${r.end_time} | ${r.hours_worked} | ${formatCurrency(r.regular_pay)} | ${formatCurrency(r.ot_pay)} | ${formatCurrency(r.total_pay)}`); });
+  rows.forEach(r => { total += r.total_pay || 0; doc.text(`${r.labour_id} | ${r.labour_name} | ${r.designation || "-"} | ${r.client_name} | ${r.site_name} | ${r.start_time} | ${r.end_time} | ${r.hours_worked} | ${formatCurrency(r.regular_pay)} | ${formatCurrency(r.ot_pay)} | ${formatCurrency(r.total_pay)}`); });
   doc.moveDown(1); doc.fontSize(12).text(`TOTAL: ${formatCurrency(total)}`, { align: "right" }); doc.end();
   return new Promise((resolve, reject) => { doc.on("end", () => resolve(Buffer.concat(chunks))); doc.on("error", reject); });
 }
@@ -41,21 +41,21 @@ function generateDailyPdfReport(date, rows) {
 // ===== Filtered Daily (for Daily Ops tab) =====
 function generateFilteredDailyExcelReport(date, rows, filterLabel) {
   const data = [["DAILY ATTENDANCE REPORT"], [`Date: ${formatDate(date)}` + (filterLabel ? ` | Filter: ${filterLabel}` : "")], [],
-    ["Labour ID", "Name", "Client", "Site", "Start", "End", "Hours", "Regular (AED)", "OT (AED)", "Total (AED)"]];
+    ["Labour ID", "Name", "Designation", "Client", "Site", "Start", "End", "Hours", "Regular (AED)", "OT (AED)", "Total (AED)"]];
   let total = 0;
-  rows.forEach(r => { total += r.total_pay || 0; data.push([r.labour_id, r.labour_name, r.client_name, r.site_name, r.start_time, r.end_time, r.hours_worked, Math.round((r.regular_pay || 0) * 100) / 100, Math.round((r.ot_pay || 0) * 100) / 100, Math.round((r.total_pay || 0) * 100) / 100]); });
-  data.push([], ["", "", "", "", "", "", "TOTAL", "", "", Math.round(total * 100) / 100], [`Workers: ${rows.length}`]);
+  rows.forEach(r => { total += r.total_pay || 0; data.push([r.labour_id, r.labour_name, r.designation || "", r.client_name, r.site_name, r.start_time, r.end_time, r.hours_worked, Math.round((r.regular_pay || 0) * 100) / 100, Math.round((r.ot_pay || 0) * 100) / 100, Math.round((r.total_pay || 0) * 100) / 100]); });
+  data.push([], ["", "", "", "", "", "", "", "TOTAL", "", "", Math.round(total * 100) / 100], [`Workers: ${rows.length}`]);
   const ws = XLSX.utils.aoa_to_sheet(data);
-  ws["!cols"] = [{ wch: 10 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
+  ws["!cols"] = [{ wch: 10 }, { wch: 20 }, { wch: 16 }, { wch: 20 }, { wch: 20 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Report"); return workbookToBuffer(wb);
 }
 
 // ===== Monthly Report =====
 function generateMonthlyExcelReport(month, rows, sundayAutoPayMap) {
   const map = {};
-  rows.forEach(r => { if (!map[r.labour_id]) map[r.labour_id] = { name: r.labour_name, recs: [] }; map[r.labour_id].recs.push(r); });
+  rows.forEach(r => { if (!map[r.labour_id]) map[r.labour_id] = { name: r.labour_name, designation: r.designation || "", recs: [] }; map[r.labour_id].recs.push(r); });
   const dim = new Date(parseInt(month.split("-")[0]), parseInt(month.split("-")[1]), 0).getDate();
-  const data = [["MONTHLY ATTENDANCE REPORT"], [`Month: ${month}`], [], ["Labour ID", "Name", "Days", "Hours", "Regular (AED)", "OT (AED)", "Sunday Rest Pay", "Total (AED)", "Attendance %"]];
+  const data = [["MONTHLY ATTENDANCE REPORT"], [`Month: ${month}`], [], ["Labour ID", "Name", "Designation", "Days", "Hours", "Regular (AED)", "OT (AED)", "Sunday Rest Pay", "Total (AED)", "Attendance %"]];
   let grand = 0;
   Object.entries(map).forEach(([id, info]) => {
     const d = info.recs.length, h = info.recs.reduce((s, r) => s + (r.hours_worked || 0), 0);
@@ -63,27 +63,36 @@ function generateMonthlyExcelReport(month, rows, sundayAutoPayMap) {
     const autoP = (sundayAutoPayMap && sundayAutoPayMap[id]) || 0;
     const totalWithAuto = tp + autoP;
     grand += totalWithAuto;
-    data.push([Number(id), info.name, d, Math.round(h * 100) / 100, Math.round(reg * 100) / 100, Math.round(ot * 100) / 100, Math.round(autoP * 100) / 100, Math.round(totalWithAuto * 100) / 100, ((d / dim) * 100).toFixed(1) + "%"]);
+    data.push([Number(id), info.name, info.designation, d, Math.round(h * 100) / 100, Math.round(reg * 100) / 100, Math.round(ot * 100) / 100, Math.round(autoP * 100) / 100, Math.round(totalWithAuto * 100) / 100, ((d / dim) * 100).toFixed(1) + "%"]);
   });
   // Add labours with zero attendance but have Sunday auto-pay
   if (sundayAutoPayMap) {
     Object.entries(sundayAutoPayMap).forEach(([id, autoP]) => {
-      if (!map[id] && autoP > 0) {
+      if (!map[id] && autoP > 0 && !id.endsWith("_name") && !id.endsWith("_designation")) {
         grand += autoP;
-        data.push([Number(id), sundayAutoPayMap[id + "_name"] || "Unknown", 0, 0, 0, 0, Math.round(autoP * 100) / 100, Math.round(autoP * 100) / 100, "0.0%"]);
+        const labelName = sundayAutoPayMap[id + "_name"] || "Unknown";
+        const labelDesig = sundayAutoPayMap[id + "_designation"] || "";
+        data.push([Number(id), labelName, labelDesig, 0, 0, 0, 0, Math.round(autoP * 100) / 100, Math.round(autoP * 100) / 100, "0.0%"]);
       }
     });
   }
-  data.push([], ["", "", "", "", "", "", "TOTAL", Math.round(grand * 100) / 100, ""]);
+  data.push([], ["", "", "", "", "", "", "", "TOTAL", Math.round(grand * 100) / 100, ""]);
   const ws = XLSX.utils.aoa_to_sheet(data);
-  ws["!cols"] = [{ wch: 10 }, { wch: 20 }, { wch: 8 }, { wch: 10 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 12 }];
+  ws["!cols"] = [{ wch: 10 }, { wch: 20 }, { wch: 16 }, { wch: 8 }, { wch: 10 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 12 }];
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Monthly Report"); return workbookToBuffer(wb);
 }
 
 // ===== Labour Report =====
 function generateLabourExcelReport(labour, month, rows, sundayAutoPay) {
   const name = labour ? labour.name : "Unknown";
-  const data = [[`LABOUR REPORT - ${name}`], [`Month: ${month}`], [], ["Date", "Client", "Site", "Start", "End", "Hours", "Regular", "OT", "Total", "Sunday", "Holiday"]];
+  const designation = labour && labour.designation ? labour.designation : "";
+  const data = [
+    [`LABOUR REPORT - ${name}`],
+    designation ? [`Designation: ${designation}`] : [""],
+    [`Month: ${month}`],
+    [],
+    ["Date", "Client", "Site", "Start", "End", "Hours", "Regular", "OT", "Total", "Sunday", "Holiday"]
+  ];
   let tp = 0;
   rows.forEach(r => { tp += r.total_pay || 0; data.push([r.date, r.client_name, r.site_name, r.start_time, r.end_time, r.hours_worked, r.regular_pay, r.ot_pay, r.total_pay, r.is_sunday ? "Yes" : "", r.is_holiday ? "Yes" : ""]); });
   const autoP = sundayAutoPay || 0;
@@ -100,36 +109,47 @@ function generateLabourExcelReport(labour, month, rows, sundayAutoPay) {
 
 // ===== Client Report =====
 function generateClientExcelReport(client, start, end, rows) {
-  const name = client ? client.name : "Unknown";
-  const data = [[`CLIENT REPORT - ${name}`], [`Period: ${formatDate(start)} to ${formatDate(end)}`], [], ["Date", "Labour ID", "Name", "Site", "Hours", "Regular", "OT", "Total"]];
+  // Backward-compatible: manager.js passes (start, end, name, rows). Detect old signature.
+  let actualClient = client, actualStart = start, actualEnd = end, actualRows = rows;
+  if (typeof client === "string") {
+    // Old signature: (start, end, name, rows)
+    actualStart = client; actualEnd = start; actualClient = { name: end }; actualRows = rows;
+  }
+  const name = actualClient ? actualClient.name : "Unknown";
+  const data = [[`CLIENT REPORT - ${name}`], [`Period: ${formatDate(actualStart)} to ${formatDate(actualEnd)}`], [], ["Date", "Labour ID", "Name", "Designation", "Site", "Hours", "Regular", "OT", "Total"]];
   let tp = 0, th = 0;
-  rows.forEach(r => { tp += r.total_pay || 0; th += r.hours_worked || 0; data.push([r.date, r.labour_id, r.labour_name, r.site_name, r.hours_worked, r.regular_pay, r.ot_pay, r.total_pay]); });
-  data.push([], ["TOTAL", "", rows.length + " entries", "", Math.round(th * 100) / 100, "", "", Math.round(tp * 100) / 100]);
+  actualRows.forEach(r => { tp += r.total_pay || 0; th += r.hours_worked || 0; data.push([r.date, r.labour_id, r.labour_name, r.designation || "", r.site_name, r.hours_worked, r.regular_pay, r.ot_pay, r.total_pay]); });
+  data.push([], ["TOTAL", "", actualRows.length + " entries", "", "", Math.round(th * 100) / 100, "", "", Math.round(tp * 100) / 100]);
   const ws = XLSX.utils.aoa_to_sheet(data);
-  ws["!cols"] = [{ wch: 12 }, { wch: 10 }, { wch: 20 }, { wch: 20 }, { wch: 8 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
+  ws["!cols"] = [{ wch: 12 }, { wch: 10 }, { wch: 20 }, { wch: 16 }, { wch: 20 }, { wch: 8 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Client Report"); return workbookToBuffer(wb);
 }
 
 // ===== Site Report =====
 function generateSiteExcelReport(site, start, end, rows) {
-  const name = site ? `${site.name} (${site.client_name})` : "Unknown";
-  const data = [[`SITE REPORT - ${name}`], [`Period: ${formatDate(start)} to ${formatDate(end)}`], [], ["Date", "Labour ID", "Name", "Hours", "Regular", "OT", "Total"]];
+  // Backward-compatible: manager.js passes (start, end, name, rows). Detect old signature.
+  let actualSite = site, actualStart = start, actualEnd = end, actualRows = rows;
+  if (typeof site === "string") {
+    actualStart = site; actualEnd = start; actualSite = { name: end }; actualRows = rows;
+  }
+  const name = actualSite ? (actualSite.client_name ? `${actualSite.name} (${actualSite.client_name})` : actualSite.name) : "Unknown";
+  const data = [[`SITE REPORT - ${name}`], [`Period: ${formatDate(actualStart)} to ${formatDate(actualEnd)}`], [], ["Date", "Labour ID", "Name", "Designation", "Hours", "Regular", "OT", "Total"]];
   let tp = 0, th = 0;
-  rows.forEach(r => { tp += r.total_pay || 0; th += r.hours_worked || 0; data.push([r.date, r.labour_id, r.labour_name, r.hours_worked, r.regular_pay, r.ot_pay, r.total_pay]); });
-  data.push([], ["TOTAL", "", rows.length + " entries", Math.round(th * 100) / 100, "", "", Math.round(tp * 100) / 100]);
+  actualRows.forEach(r => { tp += r.total_pay || 0; th += r.hours_worked || 0; data.push([r.date, r.labour_id, r.labour_name, r.designation || "", r.hours_worked, r.regular_pay, r.ot_pay, r.total_pay]); });
+  data.push([], ["TOTAL", "", actualRows.length + " entries", "", Math.round(th * 100) / 100, "", "", Math.round(tp * 100) / 100]);
   const ws = XLSX.utils.aoa_to_sheet(data);
-  ws["!cols"] = [{ wch: 12 }, { wch: 10 }, { wch: 20 }, { wch: 8 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
+  ws["!cols"] = [{ wch: 12 }, { wch: 10 }, { wch: 20 }, { wch: 16 }, { wch: 8 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Site Report"); return workbookToBuffer(wb);
 }
 
 // ===== Payroll =====
 function generatePayrollExcelReport(month, rows) {
-  const data = [["PAYROLL SUMMARY"], [`Month: ${month}`], [], ["Labour ID", "Name", "Monthly Wages", "Days", "Hours", "Regular", "OT", "Sunday", "Holiday", "Total"]];
+  const data = [["PAYROLL SUMMARY"], [`Month: ${month}`], [], ["Labour ID", "Name", "Designation", "Monthly Wages", "Days", "Hours", "Regular", "OT", "Sunday", "Holiday", "Total"]];
   let grand = 0;
-  rows.forEach(r => { grand += r.total_pay || 0; data.push([r.labour_id, r.labour_name, r.daily_wage, r.days_worked, Math.round((r.total_hours || 0) * 100) / 100, Math.round((r.total_regular || 0) * 100) / 100, Math.round((r.total_ot || 0) * 100) / 100, r.sunday_days, r.holiday_days, Math.round((r.total_pay || 0) * 100) / 100]); });
-  data.push([], ["", "", "", "", "", "", "", "", "TOTAL", Math.round(grand * 100) / 100]);
+  rows.forEach(r => { grand += r.total_pay || 0; data.push([r.labour_id, r.labour_name, r.designation || "", r.daily_wage, r.days_worked, Math.round((r.total_hours || 0) * 100) / 100, Math.round((r.total_regular || 0) * 100) / 100, Math.round((r.total_ot || 0) * 100) / 100, r.sunday_days, r.holiday_days, Math.round((r.total_pay || 0) * 100) / 100]); });
+  data.push([], ["", "", "", "", "", "", "", "", "", "TOTAL", Math.round(grand * 100) / 100]);
   const ws = XLSX.utils.aoa_to_sheet(data);
-  ws["!cols"] = [{ wch: 10 }, { wch: 20 }, { wch: 14 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 8 }, { wch: 8 }, { wch: 12 }];
+  ws["!cols"] = [{ wch: 10 }, { wch: 20 }, { wch: 16 }, { wch: 14 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 8 }, { wch: 8 }, { wch: 12 }];
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Payroll"); return workbookToBuffer(wb);
 }
 

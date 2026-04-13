@@ -6,7 +6,7 @@ function parseTimeToMinutes(timeStr) {
 // Payment calculation:
 //
 // Standard Rate = Total Salary ÷ Days in Month ÷ Standard Working Hours
-// OT Rate       = Total Salary ÷ 30 ÷ 10  (fixed 30 days, 10 hours)
+// OT Rate       = Total Salary ÷ Days in Month ÷ 10 (10 hours fixed)
 // Sunday Rate   = OT Rate × 1.5
 //
 // Regular Day:
@@ -35,8 +35,8 @@ function calculatePayment(dailyWage, startTime, endTime, date, holidays, config,
 
   const standardRate = dailyWage / daysInMonth / standardHours;
 
-  // OT rate: Salary ÷ 30 ÷ 10 (fixed denominator)
-  const overtimeRate = dailyWage / 30 / 10;
+  // OT rate: Salary ÷ Days in Month ÷ 10 (uses actual days in month, 10 hours fixed)
+  const overtimeRate = dailyWage / daysInMonth / 10;
 
   const sundayMultiplier = parseFloat(config.sunday_ot_multiplier || "1.5");
   const sundayHolidayRate = overtimeRate * sundayMultiplier;

@@ -286,7 +286,7 @@ export function AdminDashboard() {
             {filteredRows.length === 0 ? <p className="p-6 text-center text-gray-400">No records for this date</p> : filteredRows.map(row => (
               <div key={row.id} className="p-3 space-y-1">
                 <div className="flex justify-between items-start">
-                  <div><p className="font-semibold text-gray-900 text-sm">{row.labour_name || row.users?.name}</p><p className="text-xs text-gray-500">{row.client_name || row.clients?.name} • {row.site_name || row.sites?.name}</p></div>
+                  <div><p className="font-semibold text-gray-900 text-sm">{row.labour_name || row.users?.name}</p>{(row.designation || row.labour_designation) && <p className="text-[10px] text-gray-400 italic">{row.designation || row.labour_designation}</p>}<p className="text-xs text-gray-500">{row.client_name || row.clients?.name} • {row.site_name || row.sites?.name}</p></div>
                   <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${row.admin_verified ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-700"}`}>{row.admin_verified ? "✓" : "Pending"}</span>
                 </div>
                 <div className="flex items-center justify-between pt-1.5 border-t border-gray-100">
@@ -315,7 +315,7 @@ export function AdminDashboard() {
               <tbody className="divide-y divide-gray-50">
                 {filteredRows.length === 0 ? <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">No records</td></tr> : filteredRows.map(row => (
                   <tr key={row.id} className="hover:bg-gray-50/50">
-                    <td className="px-4 py-3 font-medium text-gray-900">{row.labour_name || row.users?.name}</td>
+                    <td className="px-4 py-3 font-medium text-gray-900">{row.labour_name || row.users?.name}{(row.designation || row.labour_designation) && <><br /><span className="text-[11px] text-gray-400 italic font-normal">{row.designation || row.labour_designation}</span></>}</td>
                     <td className="px-4 py-3 text-gray-600"><span className="font-medium">{row.client_name || row.clients?.name}</span><br /><span className="text-xs text-gray-400">{row.site_name || row.sites?.name}</span></td>
                     <td className="px-4 py-3 text-gray-600">{row.start_time} - {row.end_time}</td>
                     <td className="px-4 py-3 text-gray-600">{row.hours_worked}h</td>
