@@ -151,6 +151,7 @@ export function LabourManagement() {
       setAdvanceForm({ amount: "", date: new Date().toISOString().slice(0, 10), notes: "" });
       await loadAdvanceRecords(advanceModal.labour_id);
       await loadAdvanceSummary();
+      await loadLabours();
     } catch (err) { alert(err.response?.data?.message || "Failed"); }
     finally { setAdvanceSaving(false); }
   }
@@ -161,6 +162,7 @@ export function LabourManagement() {
       await api.delete(`/admin/advance-payments/${id}`);
       await loadAdvanceRecords(advanceModal.labour_id);
       await loadAdvanceSummary();
+      await loadLabours();
     } catch (err) { alert("Failed to delete"); }
   }
 
@@ -216,18 +218,39 @@ export function LabourManagement() {
 
   async function handleDeactivate(id, name) {
     if (!window.confirm(`Deactivate ${name}?`)) return;
-    try { await api.delete(`/admin/labours/${id}`); await loadLabours(); closeModal(); setDetailLabour(null); }
-    catch (err) { alert("Failed"); }
+    try {
+      await api.delete(`/admin/labours/${id}`);
+      await loadLabours();
+      // Refresh current labour in edit modal if open, else close detail popup
+      if (showModal && currentLabour?.id === id) {
+        setCurrentLabour(prev => ({ ...prev, status: "inactive" }));
+        setFormData(prev => ({ ...prev, status: "inactive" }));
+      }
+      setDetailLabour(null);
+    } catch (err) { alert("Failed"); }
   }
   async function handleActivate(id, name) {
     if (!window.confirm(`Reactivate ${name}?`)) return;
-    try { await api.put(`/admin/labours/${id}/activate`); await loadLabours(); closeModal(); setDetailLabour(null); }
-    catch (err) { alert("Failed"); }
+    try {
+      await api.put(`/admin/labours/${id}/activate`);
+      await loadLabours();
+      if (showModal && currentLabour?.id === id) {
+        setCurrentLabour(prev => ({ ...prev, status: "active" }));
+        setFormData(prev => ({ ...prev, status: "active" }));
+      }
+      setDetailLabour(null);
+    } catch (err) { alert("Failed"); }
   }
   async function handlePermanentDelete(id, name) {
     if (!window.confirm(`PERMANENTLY DELETE ${name} and ALL their records?\n\nThis CANNOT be undone!`)) return;
-    try { await api.delete(`/admin/labours/${id}/permanent`); await loadLabours(); closeModal(); setDetailLabour(null); alert("Deleted."); }
-    catch (err) { alert("Failed"); }
+    try {
+      await api.delete(`/admin/labours/${id}/permanent`);
+      await loadLabours();
+      // Delete must close edit modal since the labour no longer exists
+      closeModal();
+      setDetailLabour(null);
+      alert("Deleted.");
+    } catch (err) { alert("Failed"); }
   }
   async function handleResetPin(id, name) {
     if (!window.confirm(`Reset PIN for ${name}?`)) return;
@@ -379,9 +402,9 @@ export function LabourManagement() {
         </div>
       )}
 
-      {/* ADVANCE PAYMENT MODAL */}
+      {/* ADVANCE PAYMENT MODAL — higher z-index so it appears above Edit modal */}
       {advanceModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
           <div className="bg-white rounded-xl shadow-2xl max-w-md w-full max-h-[90vh] overflow-y-auto">
             <div className="px-5 py-4 border-b bg-red-50 rounded-t-xl">
               <h3 className="text-base font-bold text-red-900">💸 Advance Payments — {advanceModal.name}</h3>
