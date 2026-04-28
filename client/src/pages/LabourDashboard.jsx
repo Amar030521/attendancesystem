@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { api, getStoredUser } from "../api";
 import { LayoutShell } from "../components/LayoutShell";
 import { LoadingSpinner } from "../components/LoadingSpinner";
-import { calculatePayment } from "../utils/calculatePayment";
+import { Avatar } from "../components/LabourManagement";
+import { calculatePayment, calculateSundayAutoPay } from "../utils/calculatePayment";
 
 function formatCurrency(amount) {
   return new Intl.NumberFormat("en-AE", {
@@ -451,7 +452,52 @@ export function LabourDashboard() {
 
   // ===================== TAB: HISTORY =====================
   function renderHistory() {
-    const sorted = history ? [...history].sort((a, b) => new Date(b.date) - new Date(a.date)) : [];
+    const attendanceRecords = history ? [...history].sort((a, b) => new Date(b.date) - new Date(a.date)) : [];
+    const attendanceDateSet = new Set(attendanceRecords.map(r => r.date));
+
+    // Build Sunday/Holiday rest pay entries for the selected period
+    const sundayEntries = [];
+    if (config && summary?.dailyWage) {
+      let periodStart, periodEnd;
+      const uaeToday = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
+      if (period === "week") {
+        const d = new Date(); d.setDate(d.getDate() - 7);
+        periodStart = d.toISOString().slice(0, 10); periodEnd = uaeToday;
+      } else if (period === "month") {
+        const now = new Date();
+        periodStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+        periodEnd = uaeToday;
+      } else if (period === "custom" && customRange.start && customRange.end) {
+        periodStart = customRange.start; periodEnd = customRange.end;
+      }
+      if (periodStart && periodEnd) {
+        const start = new Date(periodStart);
+        const end = new Date(periodEnd);
+        for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+          const ds = d.toISOString().slice(0, 10);
+          const isSun = d.getDay() === 0;
+          const isHol = (holidays || []).some(h => h.date === ds);
+          if ((isSun || isHol) && !attendanceDateSet.has(ds)) {
+            const restPay = calculateSundayAutoPay(summary.dailyWage, ds, config);
+            sundayEntries.push({
+              id: `sunday-${ds}`,
+              date: ds,
+              is_sunday_rest: true,
+              is_sunday: isSun,
+              is_holiday: isHol,
+              regular_pay: restPay,
+              ot_pay: 0,
+              total_pay: restPay,
+              hours_worked: 0,
+              client_name: isSun ? "Sunday Rest Day" : "Holiday Rest Day",
+            });
+          }
+        }
+      }
+    }
+
+    // Merge and sort all entries (attendance + Sunday rest) newest first
+    const sorted = [...attendanceRecords, ...sundayEntries].sort((a, b) => new Date(b.date) - new Date(a.date));
     const totalPay = sorted.reduce((s, r) => s + (r.total_pay || 0), 0);
     const totalOT = sorted.reduce((s, r) => s + (r.ot_pay || 0), 0);
 
@@ -497,25 +543,37 @@ export function LabourDashboard() {
             {/* Day-by-day Records */}
             <div className="space-y-2">
               {sorted.map((record) => (
-                <div key={record.id} onClick={() => setSelectedRecord(record)} className="bg-white rounded-xl shadow-sm border border-gray-100 p-3.5 active:bg-gray-50 cursor-pointer">
+                <div key={record.id} onClick={() => !record.is_sunday_rest && setSelectedRecord(record)} className={`bg-white rounded-xl shadow-sm border p-3.5 ${record.is_sunday_rest ? "border-purple-200 bg-purple-50/50" : "border-gray-100 active:bg-gray-50 cursor-pointer"}`}>
                   <div className="flex items-center justify-between">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-bold text-gray-900">
                           {new Date(record.date).toLocaleDateString("en-GB", { day: "2-digit", month: "short", weekday: "short" })}
                         </span>
-                        {(record.is_sunday || record.is_holiday) && <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full font-semibold">{record.is_sunday ? "Sun" : "Holiday"}</span>}
-                        {record.admin_verified && <span className="text-xs text-green-500">✅</span>}
+                        {record.is_sunday_rest ? (
+                          <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full font-semibold">📅 Rest Day</span>
+                        ) : (
+                          <>
+                            {(record.is_sunday || record.is_holiday) && <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full font-semibold">{record.is_sunday ? "Sun" : "Holiday"}</span>}
+                            {record.admin_verified && <span className="text-xs text-green-500">✅</span>}
+                          </>
+                        )}
                       </div>
-                      <div className="text-[11px] text-gray-500 mt-0.5">{record.client_name} • {record.hours_worked}h • {record.start_time}-{record.end_time}</div>
+                      <div className="text-[11px] text-gray-500 mt-0.5">
+                        {record.is_sunday_rest ? (
+                          <span className="text-purple-600 font-medium">{record.client_name}</span>
+                        ) : (
+                          <>{record.client_name} • {record.hours_worked}h • {record.start_time}-{record.end_time}</>
+                        )}
+                      </div>
                     </div>
                     <div className="text-right shrink-0 ml-3">
-                      <p className="text-base font-bold text-green-600">{formatCurrency(record.total_pay)}</p>
-                      {record.ot_pay > 0 && <p className="text-[10px] font-semibold text-orange-500">+{formatCurrency(record.ot_pay)} OT 🔥</p>}
+                      <p className={`text-base font-bold ${record.is_sunday_rest ? "text-purple-600" : "text-green-600"}`}>{formatCurrency(record.total_pay)}</p>
+                      {record.ot_pay > 0 && !record.is_sunday_rest && <p className="text-[10px] font-semibold text-orange-500">+{formatCurrency(record.ot_pay)} OT 🔥</p>}
                     </div>
                   </div>
                   {/* Mini OT bar if there's OT */}
-                  {record.ot_pay > 0 && record.total_pay > 0 && (
+                  {record.ot_pay > 0 && record.total_pay > 0 && !record.is_sunday_rest && (
                     <div className="mt-2 h-1.5 rounded-full bg-gray-100 overflow-hidden flex">
                       <div style={{ width: `${Math.round((record.regular_pay / record.total_pay) * 100)}%` }} className="bg-blue-400 rounded-full" />
                       <div style={{ width: `${Math.round((record.ot_pay / record.total_pay) * 100)}%` }} className="bg-orange-400 rounded-full" />
@@ -576,7 +634,7 @@ export function LabourDashboard() {
 
   // ===================== MAIN RENDER =====================
   return (
-    <LayoutShell title="WorkTrack" designation={designation}>
+    <LayoutShell title="WorkTrack" designation={designation} photoUrl={summary?.photoUrl}>
       <div className="w-full max-w-lg mx-auto pb-20">
         {/* Toast */}
         {toast && (

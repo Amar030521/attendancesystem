@@ -80,7 +80,9 @@ function getSundaysAndHolidaysInMonth(monthStr, holidayDates) {
 }
 
 /**
- * Calculate Sunday/Holiday auto-pay for unattended days in a month.
+ * Calculate Sunday/Holiday auto-pay (rest day pay) for UNATTENDED Sundays/holidays.
+ * When a worker works on Sunday, they get Sunday OT rate (1.5×) which covers everything.
+ * When they don't work, they get rest day pay only.
  */
 function calcSundayAutoPayForMonth(monthStr, dailyWage, attendanceDates, holidayDates, config) {
   const allSH = getSundaysAndHolidaysInMonth(monthStr, holidayDates);

@@ -53,7 +53,7 @@ router.get("/dashboard", async (req, res) => {
     const monthStr = `${uae.year}-${String(uae.month).padStart(2, "0")}`;
     const monthStart = `${monthStr}-01`;
 
-    const { data: userInfo } = await supabase.from("users").select("designation, daily_wage").eq("id", labourId).single();
+    const { data: userInfo } = await supabase.from("users").select("designation, daily_wage, photo_url").eq("id", labourId).single();
 
     // Get advance payment total from advance_payments table
     const { data: advRows } = await supabase.from("advance_payments").select("amount, date, notes").eq("labour_id", labourId).order("date", { ascending: false });
@@ -104,6 +104,7 @@ router.get("/dashboard", async (req, res) => {
     return res.json({
       designation: userInfo?.designation || null,
       dailyWage: userInfo?.daily_wage || 0,
+      photoUrl: userInfo?.photo_url || null,
       advancePayment: Math.round(totalAdvance * 100) / 100,
       advanceHistory: advRows || [],
       yesterday: flattenAtt(yesterdayAtt),

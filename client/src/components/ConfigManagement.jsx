@@ -83,12 +83,13 @@ export function ConfigManagement() {
           <p className="font-semibold text-blue-900 mb-3">💡 Payment Formula Summary</p>
           <div className="space-y-2 text-blue-800">
             <p><strong>Standard Rate</strong> = Monthly Salary ÷ Days in Month ÷ {stdHours}h</p>
-            <p><strong>OT Rate</strong> = Monthly Salary ÷ Days in Month ÷ 10</p>
+            <p><strong>OT Rate</strong> = Monthly Salary ÷ 30 ÷ 10 (fixed)</p>
             <p><strong>Sunday/Holiday OT Rate</strong> = OT Rate × {sunMult}</p>
           </div>
           <div className="mt-3 pt-3 border-t border-blue-200 space-y-1 text-blue-700 text-xs">
-            <p>Example (Salary AED 1,500, 31-day month): OT = 1500÷31÷10 = <strong>AED 4.84/hr</strong> → Sunday OT = 4.84 × {sunMult} = <strong>AED {(4.84 * sunMult).toFixed(2)}/hr</strong></p>
-            <p>Example (Salary AED 1,500, 28-day month): OT = 1500÷28÷10 = <strong>AED 5.36/hr</strong> → Sunday OT = 5.36 × {sunMult} = <strong>AED {(5.36 * sunMult).toFixed(2)}/hr</strong></p>
+            <p>Example (Salary AED 1,500): OT = 1500÷30÷10 = <strong>AED 5.00/hr</strong> → Sunday OT = 5.00 × {sunMult} = <strong>AED {(5 * sunMult).toFixed(2)}/hr</strong></p>
+            <p>Example (Salary AED 1,200): OT = 1200÷30÷10 = <strong>AED 4.00/hr</strong> → Sunday OT = 4.00 × {sunMult} = <strong>AED {(4 * sunMult).toFixed(2)}/hr</strong></p>
+            <p className="text-blue-500 mt-1">Sunday: Rest pay (salary÷days_in_month) is always paid. If worked, all hours are also paid at Sunday OT rate.</p>
           </div>
         </div>
 

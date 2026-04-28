@@ -3,7 +3,7 @@ export function parseTimeToMinutes(timeStr) {
   return h * 60 + m;
 }
 
-// OT Rate = Salary ÷ Days in Month ÷ 10
+// OT Rate = Salary ÷ 30 ÷ 10 (FIXED 30 days)
 // Sunday Rate = OT Rate × 1.5
 export function calculatePayment(dailyWage, startTime, endTime, date, holidays, config, designation) {
   if (!dailyWage || !startTime || !endTime || !date || !config) {
@@ -26,8 +26,8 @@ export function calculatePayment(dailyWage, startTime, endTime, date, holidays, 
 
   const standardRate = dailyWage / daysInMonth / standardHours;
 
-  // OT rate: Salary ÷ Days in Month ÷ 10 (uses actual days in month, 10 hours fixed)
-  const overtimeRate = dailyWage / daysInMonth / 10;
+  // OT rate: Salary ÷ 30 ÷ 10 (FIXED 30 days, 10 hours — consistent every month)
+  const overtimeRate = dailyWage / 30 / 10;
 
   const sundayMultiplier = parseFloat(config.sunday_ot_multiplier || "1.5");
   const sundayHolidayRate = overtimeRate * sundayMultiplier;
@@ -40,11 +40,13 @@ export function calculatePayment(dailyWage, startTime, endTime, date, holidays, 
   let totalPay = 0;
 
   if (isSunday || isHoliday) {
-    const fixedPay = standardHours * standardRate;
-    const overtimeComponent = hoursWorked * sundayHolidayRate;
-    regularPay = fixedPay;
-    otPay = overtimeComponent;
-    totalPay = fixedPay + overtimeComponent;
+    // Sunday/Holiday WITH attendance:
+    // No regular pay — Sunday OT rate (1.5×) covers everything
+    // Minimum 10 hours pay even for shorter shifts
+    const effectiveHours = Math.max(hoursWorked, standardHours);
+    regularPay = 0;
+    otPay = effectiveHours * sundayHolidayRate;
+    totalPay = otPay;
   } else {
     regularPay = standardHours * standardRate;
     if (hoursWorked > standardHours) {
