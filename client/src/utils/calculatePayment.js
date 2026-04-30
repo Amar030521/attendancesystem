@@ -40,13 +40,10 @@ export function calculatePayment(dailyWage, startTime, endTime, date, holidays, 
   let totalPay = 0;
 
   if (isSunday || isHoliday) {
-    // Sunday/Holiday WITH attendance:
-    // No regular pay — Sunday OT rate (1.5×) covers everything
-    // Minimum 10 hours pay even for shorter shifts
-    const effectiveHours = Math.max(hoursWorked, standardHours);
-    regularPay = 0;
-    otPay = effectiveHours * sundayHolidayRate;
-    totalPay = otPay;
+    // Sunday/Holiday: Normal daily salary + OT for all worked hours
+    regularPay = standardHours * standardRate;
+    otPay = hoursWorked * sundayHolidayRate;
+    totalPay = regularPay + otPay;
   } else {
     regularPay = standardHours * standardRate;
     if (hoursWorked > standardHours) {

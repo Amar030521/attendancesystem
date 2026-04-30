@@ -14,12 +14,13 @@ function parseTimeToMinutes(timeStr) {
 //   If hours > stdHours: OTPay = (hours - stdHours) × OTRate
 //
 // Sunday / Holiday (WITH attendance):
-//   RegularPay = 0
-//   OTPay      = max(workedHours, stdHours) × SundayRate
-//   No auto-pay added — the Sunday OT rate (1.5×) already covers everything
+//   RegularPay = stdHours × StandardRate  (normal daily salary = AED 100)
+//   OTPay      = workedHours × SundayRate  (ALL worked hours are OT at 1.5×)
+//   Total      = RegularPay + OTPay
+//   Auto-pay does NOT apply (worker already gets regularPay)
 //
 // Sunday / Holiday (WITHOUT attendance - auto-pay):
-//   Auto-pay = salary ÷ 30 (base daily pay for rest day)
+//   Auto-pay = salary ÷ days_in_month (base daily pay for rest day)
 //   Only applies to Sundays/holidays where the worker did NOT check in
 //
 function calculatePayment(dailyWage, startTime, endTime, date, holidays, config, designation) {
@@ -50,13 +51,10 @@ function calculatePayment(dailyWage, startTime, endTime, date, holidays, config,
   let totalPay = 0;
 
   if (isSunday || isHoliday) {
-    // Sunday/Holiday WITH attendance:
-    // No regular pay — Sunday OT rate (1.5×) covers everything
-    // Minimum 10 hours pay even for shorter shifts (same full-day rule as weekdays)
-    const effectiveHours = Math.max(hoursWorked, standardHours);
-    regularPay = 0;
-    otPay = effectiveHours * sundayHolidayRate;
-    totalPay = otPay;
+    // Sunday/Holiday: Normal daily salary + OT for all worked hours
+    regularPay = standardHours * standardRate;
+    otPay = hoursWorked * sundayHolidayRate;
+    totalPay = regularPay + otPay;
   } else {
     regularPay = standardHours * standardRate;
     if (hoursWorked > standardHours) {
