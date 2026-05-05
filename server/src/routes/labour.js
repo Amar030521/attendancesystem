@@ -38,6 +38,12 @@ function toDateStr(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+function nextMonthStart(monthStr) {
+  const [y, m] = monthStr.split("-").map(Number);
+  const d = new Date(y, m, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
 /**
  * Get Sundays and holidays in a month that DON'T have attendance.
  * Returns { autoPay, autoPayDays }
@@ -87,6 +93,12 @@ router.get("/dashboard", async (req, res) => {
     const { data: advRows } = await supabase.from("advance_payments").select("amount, date, notes").eq("labour_id", labourId).order("date", { ascending: false });
     const totalAdvance = (advRows || []).reduce((s, r) => s + (r.amount || 0), 0);
 
+    // Get daily adjustments (incentives & deductions) for current month
+    const { data: adjRows } = await supabase.from("daily_adjustments").select("id, type, amount, date, remarks")
+      .eq("labour_id", labourId).gte("date", `${monthStr}-01`).lt("date", nextMonthStart(monthStr)).order("date", { ascending: false });
+    const monthIncentives = (adjRows || []).filter(r => r.type === "incentive").reduce((s, r) => s + Number(r.amount), 0);
+    const monthDeductions = (adjRows || []).filter(r => r.type === "deduction").reduce((s, r) => s + Number(r.amount), 0);
+
     const { data: yesterdayAtt } = await supabase
       .from("attendance").select("*, clients(name), sites(name)")
       .eq("labour_id", labourId).eq("date", yesterday).single();
@@ -135,6 +147,9 @@ router.get("/dashboard", async (req, res) => {
       photoUrl: userInfo?.photo_url || null,
       advancePayment: Math.round(totalAdvance * 100) / 100,
       advanceHistory: advRows || [],
+      adjustments: adjRows || [],
+      monthIncentives: Math.round(monthIncentives * 100) / 100,
+      monthDeductions: Math.round(monthDeductions * 100) / 100,
       yesterday: flattenAtt(yesterdayAtt),
       todayEntry: flattenAtt(todayAtt),
       monthSummary,
@@ -171,7 +186,12 @@ router.get("/attendance", async (req, res) => {
       .order("date", { ascending: false });
 
     const rows = (data || []).map(a => ({ ...a, client_name: a.clients?.name, site_name: a.sites?.name, clients: undefined, sites: undefined }));
-    return res.json(rows);
+
+    // Also fetch adjustments for this period
+    const { data: adjData } = await supabase.from("daily_adjustments").select("id, type, amount, date, remarks")
+      .eq("labour_id", labourId).gte("date", startDate).lte("date", endDate).order("date", { ascending: false });
+
+    return res.json({ attendance: rows, adjustments: adjData || [] });
   } catch (err) { console.error("Labour attendance error:", err); return res.status(500).json({ message: "Internal server error" }); }
 });
 

@@ -91,13 +91,22 @@ export function LabourManagement() {
   const [advanceSaving, setAdvanceSaving] = useState(false);
   const [advanceTotals, setAdvanceTotals] = useState({});
 
+  // Daily adjustments (incentives & deductions) state
+  const [adjustmentModal, setAdjustmentModal] = useState(null);
+  const [adjustmentRecords, setAdjustmentRecords] = useState([]);
+  const [adjustmentTotals, setAdjustmentTotals] = useState({ incentives: 0, deductions: 0 });
+  const [adjustmentLoading, setAdjustmentLoading] = useState(false);
+  const [adjustmentForm, setAdjustmentForm] = useState({ type: "incentive", amount: "", date: new Date().toISOString().slice(0, 10), remarks: "" });
+  const [adjustmentSaving, setAdjustmentSaving] = useState(false);
+  const [adjustmentSummary, setAdjustmentSummary] = useState({});
+
   // Salary history state
   const [salaryHistory, setSalaryHistory] = useState([]);
   const [salaryHistoryLoading, setSalaryHistoryLoading] = useState(false);
   const [salaryForm, setSalaryForm] = useState({ salary: "", effective_date: new Date().toISOString().slice(0, 10), notes: "" });
   const [salarySaving, setSalarySaving] = useState(false);
 
-  useEffect(() => { loadLabours(); loadAdvanceSummary(); }, []);
+  useEffect(() => { loadLabours(); loadAdvanceSummary(); loadAdjustmentSummary(); }, []);
 
   async function loadLabours() {
     try { setLoading(true); setLabours((await api.get("/admin/labours")).data); }
@@ -110,6 +119,54 @@ export function LabourManagement() {
       const { data } = await api.get("/admin/advance-payments-summary");
       setAdvanceTotals(data.byLabour || {});
     } catch (err) { console.error(err); }
+  }
+
+  async function loadAdjustmentSummary() {
+    try {
+      const { data } = await api.get("/admin/daily-adjustments-summary");
+      setAdjustmentSummary(data.byLabour || {});
+    } catch (err) { console.error(err); }
+  }
+
+  async function loadAdjustmentRecords(labourId) {
+    try {
+      setAdjustmentLoading(true);
+      const { data } = await api.get(`/admin/daily-adjustments/${labourId}`);
+      setAdjustmentRecords(data.records || []);
+      setAdjustmentTotals({ incentives: data.totalIncentives || 0, deductions: data.totalDeductions || 0 });
+    } catch (err) { console.error(err); }
+    finally { setAdjustmentLoading(false); }
+  }
+
+  function openAdjustmentModal(labour) {
+    setAdjustmentModal({ labour_id: labour.id, name: labour.name });
+    setAdjustmentForm({ type: "incentive", amount: "", date: new Date().toISOString().slice(0, 10), remarks: "" });
+    loadAdjustmentRecords(labour.id);
+  }
+
+  async function handleAddAdjustment() {
+    if (!adjustmentForm.amount || Number(adjustmentForm.amount) <= 0) { alert("Enter a valid amount"); return; }
+    if (!adjustmentForm.date) { alert("Select a date"); return; }
+    try {
+      setAdjustmentSaving(true);
+      await api.post("/admin/daily-adjustments", {
+        labour_id: adjustmentModal.labour_id, date: adjustmentForm.date,
+        type: adjustmentForm.type, amount: Number(adjustmentForm.amount), remarks: adjustmentForm.remarks,
+      });
+      setAdjustmentForm({ type: "incentive", amount: "", date: new Date().toISOString().slice(0, 10), remarks: "" });
+      await loadAdjustmentRecords(adjustmentModal.labour_id);
+      await loadAdjustmentSummary();
+    } catch (err) { alert(err.response?.data?.message || "Failed"); }
+    finally { setAdjustmentSaving(false); }
+  }
+
+  async function handleDeleteAdjustment(id) {
+    if (!window.confirm("Delete this entry?")) return;
+    try {
+      await api.delete(`/admin/daily-adjustments/${id}`);
+      await loadAdjustmentRecords(adjustmentModal.labour_id);
+      await loadAdjustmentSummary();
+    } catch (err) { alert("Failed to delete"); }
   }
 
   async function loadAdvanceRecords(labourId) {
@@ -388,6 +445,7 @@ export function LabourManagement() {
               <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Designation</th>
               <th className="px-3 py-3 text-right text-xs font-semibold text-gray-600">Monthly Wages</th>
               <th className="px-3 py-3 text-right text-xs font-semibold text-gray-600">Advance</th>
+              <th className="px-3 py-3 text-center text-xs font-semibold text-gray-600">Incentive / Deduction</th>
               <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Phone</th>
               <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Passport</th>
               <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Joining</th>
@@ -396,7 +454,7 @@ export function LabourManagement() {
               <th className="px-3 py-3 text-center text-xs font-semibold text-gray-600">Action</th>
             </tr></thead>
             <tbody className="divide-y divide-gray-100">
-              {pagedLabours.length === 0 ? <tr><td colSpan="11" className="px-4 py-8 text-center text-gray-400">No labours found</td></tr> :
+              {pagedLabours.length === 0 ? <tr><td colSpan="12" className="px-4 py-8 text-center text-gray-400">No labours found</td></tr> :
                 pagedLabours.map(l => (
                   <tr key={l.id} className="hover:bg-gray-50/50">
                     <td className="px-3 py-3 font-medium">{l.id}</td>
@@ -409,6 +467,17 @@ export function LabourManagement() {
                     <td className="px-3 py-3 text-xs text-gray-600">{l.designation || "-"}</td>
                     <td className="px-3 py-3 text-right">AED {Number(l.daily_wage).toLocaleString()}</td>
                     <td className="px-3 py-3 text-right">{advanceTotals[l.id] > 0 ? <button onClick={() => openAdvanceModal(l)} className="text-red-600 font-semibold hover:underline">AED {Number(advanceTotals[l.id]).toLocaleString()}</button> : <button onClick={() => openAdvanceModal(l)} className="text-gray-400 hover:text-blue-600 text-xs">+ Add</button>}</td>
+                    <td className="px-3 py-3 text-center">
+                      <button onClick={() => openAdjustmentModal(l)} className="text-xs hover:underline">
+                        {adjustmentSummary[l.id] ? (
+                          <span>
+                            {adjustmentSummary[l.id].incentives > 0 && <span className="text-emerald-600 font-semibold">+{Number(adjustmentSummary[l.id].incentives).toLocaleString()}</span>}
+                            {adjustmentSummary[l.id].incentives > 0 && adjustmentSummary[l.id].deductions > 0 && <span className="text-gray-400 mx-1">/</span>}
+                            {adjustmentSummary[l.id].deductions > 0 && <span className="text-red-600 font-semibold">-{Number(adjustmentSummary[l.id].deductions).toLocaleString()}</span>}
+                          </span>
+                        ) : <span className="text-gray-400">+ Add</span>}
+                      </button>
+                    </td>
                     <td className="px-3 py-3">{l.phone || "-"}</td>
                     <td className="px-3 py-3">{l.passport_id || "-"}</td>
                     <td className="px-3 py-3">{fmtDate(l.date_of_joining)}</td>
@@ -491,6 +560,58 @@ export function LabourManagement() {
               }
             </div>
             <div className="px-5 py-3 border-t"><button onClick={() => setAdvanceModal(null)} className="w-full py-2.5 border rounded-xl text-sm font-medium">Close</button></div>
+          </div>
+        </div>
+      )}
+
+      {/* DAILY ADJUSTMENTS MODAL (Incentives & Deductions) */}
+      {adjustmentModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full max-h-[90vh] overflow-y-auto">
+            <div className="px-5 py-4 border-b bg-emerald-50 rounded-t-xl">
+              <h3 className="text-base font-bold text-emerald-900">📊 Incentives & Deductions — {adjustmentModal.name}</h3>
+              <div className="flex gap-3 mt-1">
+                {adjustmentTotals.incentives > 0 && <span className="text-xs text-emerald-600 font-semibold">Incentives: AED {adjustmentTotals.incentives.toLocaleString()}</span>}
+                {adjustmentTotals.deductions > 0 && <span className="text-xs text-red-600 font-semibold">Deductions: AED {adjustmentTotals.deductions.toLocaleString()}</span>}
+              </div>
+            </div>
+            <div className="px-5 py-4 border-b border-gray-100 space-y-3">
+              <p className="text-xs font-semibold text-gray-700">Add New Entry</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="block text-xs text-gray-500 mb-1">Type *</label>
+                  <select value={adjustmentForm.type} onChange={e => setAdjustmentForm(f => ({ ...f, type: e.target.value }))} className="w-full px-3 py-2 border rounded-lg text-sm">
+                    <option value="incentive">🎁 Incentive</option>
+                    <option value="deduction">⚠️ Deduction</option>
+                  </select>
+                </div>
+                <div><label className="block text-xs text-gray-500 mb-1">Amount (AED) *</label><input type="number" min="1" value={adjustmentForm.amount} onChange={e => setAdjustmentForm(f => ({ ...f, amount: e.target.value }))} className="w-full px-3 py-2 border rounded-lg text-sm" placeholder="e.g. 100" /></div>
+              </div>
+              <div><label className="block text-xs text-gray-500 mb-1">Date *</label><input type="date" value={adjustmentForm.date} onChange={e => setAdjustmentForm(f => ({ ...f, date: e.target.value }))} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
+              <div><label className="block text-xs text-gray-500 mb-1">Remarks *</label><input type="text" value={adjustmentForm.remarks} onChange={e => setAdjustmentForm(f => ({ ...f, remarks: e.target.value }))} className="w-full px-3 py-2 border rounded-lg text-sm" placeholder="e.g. Incentive for supervisor work" /></div>
+              <button onClick={handleAddAdjustment} disabled={adjustmentSaving} className={`w-full py-2 text-white rounded-lg text-sm font-semibold disabled:opacity-50 ${adjustmentForm.type === "incentive" ? "bg-emerald-600" : "bg-red-600"}`}>{adjustmentSaving ? "Saving..." : `+ Add ${adjustmentForm.type === "incentive" ? "Incentive" : "Deduction"}`}</button>
+            </div>
+            <div className="px-5 py-3">
+              <p className="text-xs font-semibold text-gray-700 mb-2">History</p>
+              {adjustmentLoading ? <p className="text-center text-gray-400 py-4 text-sm">Loading...</p> :
+                adjustmentRecords.length === 0 ? <p className="text-center text-gray-400 py-4 text-sm">No entries recorded</p> :
+                <div className="space-y-2 max-h-60 overflow-y-auto">
+                  {adjustmentRecords.map(r => (
+                    <div key={r.id} className={`flex items-center justify-between py-2 px-3 rounded-lg ${r.type === "incentive" ? "bg-emerald-50" : "bg-red-50"}`}>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className={`text-sm font-bold ${r.type === "incentive" ? "text-emerald-600" : "text-red-600"}`}>{r.type === "incentive" ? "+" : "-"}AED {Number(r.amount).toLocaleString()}</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${r.type === "incentive" ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>{r.type}</span>
+                          <span className="text-[10px] text-gray-400">{new Date(r.date).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}</span>
+                        </div>
+                        {r.remarks && <p className="text-xs text-gray-500 mt-0.5">{r.remarks}</p>}
+                      </div>
+                      <button onClick={() => handleDeleteAdjustment(r.id)} className="text-xs text-red-400 hover:text-red-600 px-2 py-1">✕</button>
+                    </div>
+                  ))}
+                </div>
+              }
+            </div>
+            <div className="px-5 py-3 border-t"><button onClick={() => setAdjustmentModal(null)} className="w-full py-2.5 border rounded-xl text-sm font-medium">Close</button></div>
           </div>
         </div>
       )}

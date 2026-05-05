@@ -38,6 +38,7 @@ export function LabourDashboard() {
   const [designation, setDesignation] = useState("");
   const [period, setPeriod] = useState("week");
   const [history, setHistory] = useState([]);
+  const [historyAdjustments, setHistoryAdjustments] = useState([]);
   const [customRange, setCustomRange] = useState({ start: todayISO(), end: todayISO() });
   const [historyLoading, setHistoryLoading] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState(null);
@@ -105,9 +106,16 @@ export function LabourDashboard() {
       let url = `/labour/attendance?period=${period}`;
       if (period === "custom") url += `&start=${customRange.start}&end=${customRange.end}`;
       const res = await api.get(url);
-      setHistory(res.data || []);
+      // Handle both old (array) and new ({ attendance, adjustments }) response shapes
+      if (Array.isArray(res.data)) {
+        setHistory(res.data);
+        setHistoryAdjustments([]);
+      } else {
+        setHistory(res.data?.attendance || []);
+        setHistoryAdjustments(res.data?.adjustments || []);
+      }
     } catch (err) {
-      console.error(err); setHistory([]);
+      console.error(err); setHistory([]); setHistoryAdjustments([]);
     } finally {
       setHistoryLoading(false);
     }
@@ -323,6 +331,34 @@ export function LabourDashboard() {
           </div>
         )}
 
+        {/* Incentives & Deductions */}
+        {(summary?.monthIncentives > 0 || summary?.monthDeductions > 0) && (
+          <div className="space-y-2">
+            {summary.monthIncentives > 0 && (
+              <div className="bg-emerald-50 rounded-2xl border border-emerald-200 p-3.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">🎁</span>
+                    <p className="text-xs font-medium text-emerald-700">Incentives This Month</p>
+                  </div>
+                  <p className="text-base font-bold text-emerald-700">+{formatCurrency(summary.monthIncentives)}</p>
+                </div>
+              </div>
+            )}
+            {summary.monthDeductions > 0 && (
+              <div className="bg-orange-50 rounded-2xl border border-orange-200 p-3.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">⚠️</span>
+                    <p className="text-xs font-medium text-orange-700">Deductions This Month</p>
+                  </div>
+                  <p className="text-base font-bold text-orange-700">-{formatCurrency(summary.monthDeductions)}</p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Sunday/Holiday info */}
         {(ms?.sundayDays > 0 || ms?.holidayDays > 0) && (
           <div className="bg-purple-50 rounded-2xl border border-purple-200 p-3.5">
@@ -496,10 +532,26 @@ export function LabourDashboard() {
       }
     }
 
-    // Merge and sort all entries (attendance + Sunday rest) newest first
-    const sorted = [...attendanceRecords, ...sundayEntries].sort((a, b) => new Date(b.date) - new Date(a.date));
+    // Build adjustment entries for the timeline
+    const adjustmentEntries = (historyAdjustments || []).map(a => ({
+      id: `adj-${a.id}`,
+      date: a.date,
+      is_adjustment: true,
+      adjustment_type: a.type,
+      total_pay: a.type === "incentive" ? Number(a.amount) : -Number(a.amount),
+      amount: Number(a.amount),
+      remarks: a.remarks,
+      regular_pay: 0,
+      ot_pay: 0,
+      hours_worked: 0,
+    }));
+
+    // Merge and sort all entries (attendance + Sunday rest + adjustments) newest first
+    const sorted = [...attendanceRecords, ...sundayEntries, ...adjustmentEntries].sort((a, b) => new Date(b.date) - new Date(a.date));
     const totalPay = sorted.reduce((s, r) => s + (r.total_pay || 0), 0);
-    const totalOT = sorted.reduce((s, r) => s + (r.ot_pay || 0), 0);
+    const totalOT = sorted.filter(r => !r.is_adjustment).reduce((s, r) => s + (r.ot_pay || 0), 0);
+    const totalIncentives = adjustmentEntries.filter(a => a.adjustment_type === "incentive").reduce((s, r) => s + r.amount, 0);
+    const totalDeductions = adjustmentEntries.filter(a => a.adjustment_type === "deduction").reduce((s, r) => s + r.amount, 0);
 
     return (
       <div className="space-y-4">
@@ -529,13 +581,29 @@ export function LabourDashboard() {
             {/* Period Summary */}
             <div className="bg-white rounded-2xl shadow-md p-4">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-bold text-gray-800">{sorted.length} Days</span>
+                <span className="text-sm font-bold text-gray-800">{sorted.length} Entries</span>
                 <span className="text-lg font-black text-green-600">{formatCurrency(totalPay)}</span>
               </div>
               {totalOT > 0 && (
-                <div className="flex items-center gap-2 bg-orange-50 rounded-xl px-3 py-2">
+                <div className="flex items-center gap-2 bg-orange-50 rounded-xl px-3 py-2 mb-1.5">
                   <span className="text-base">🔥</span>
                   <span className="text-xs text-orange-700 font-semibold">OT earned: {formatCurrency(totalOT)}</span>
+                </div>
+              )}
+              {(totalIncentives > 0 || totalDeductions > 0) && (
+                <div className="flex gap-2 mt-1.5">
+                  {totalIncentives > 0 && (
+                    <div className="flex items-center gap-1 bg-emerald-50 rounded-lg px-2.5 py-1.5 flex-1">
+                      <span className="text-xs">🎁</span>
+                      <span className="text-[11px] text-emerald-700 font-semibold">+{formatCurrency(totalIncentives)}</span>
+                    </div>
+                  )}
+                  {totalDeductions > 0 && (
+                    <div className="flex items-center gap-1 bg-red-50 rounded-lg px-2.5 py-1.5 flex-1">
+                      <span className="text-xs">⚠️</span>
+                      <span className="text-[11px] text-red-600 font-semibold">-{formatCurrency(totalDeductions)}</span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -543,14 +611,18 @@ export function LabourDashboard() {
             {/* Day-by-day Records */}
             <div className="space-y-2">
               {sorted.map((record) => (
-                <div key={record.id} onClick={() => !record.is_sunday_rest && setSelectedRecord(record)} className={`bg-white rounded-xl shadow-sm border p-3.5 ${record.is_sunday_rest ? "border-purple-200 bg-purple-50/50" : "border-gray-100 active:bg-gray-50 cursor-pointer"}`}>
+                <div key={record.id} onClick={() => !record.is_sunday_rest && !record.is_adjustment && setSelectedRecord(record)} className={`bg-white rounded-xl shadow-sm border p-3.5 ${record.is_sunday_rest ? "border-purple-200 bg-purple-50/50" : record.is_adjustment ? (record.adjustment_type === "incentive" ? "border-emerald-200 bg-emerald-50/50" : "border-red-200 bg-red-50/50") : "border-gray-100 active:bg-gray-50 cursor-pointer"}`}>
                   <div className="flex items-center justify-between">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-bold text-gray-900">
                           {new Date(record.date).toLocaleDateString("en-GB", { day: "2-digit", month: "short", weekday: "short" })}
                         </span>
-                        {record.is_sunday_rest ? (
+                        {record.is_adjustment ? (
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${record.adjustment_type === "incentive" ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
+                            {record.adjustment_type === "incentive" ? "🎁 Incentive" : "⚠️ Deduction"}
+                          </span>
+                        ) : record.is_sunday_rest ? (
                           <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full font-semibold">📅 Rest Day</span>
                         ) : (
                           <>
@@ -560,7 +632,9 @@ export function LabourDashboard() {
                         )}
                       </div>
                       <div className="text-[11px] text-gray-500 mt-0.5">
-                        {record.is_sunday_rest ? (
+                        {record.is_adjustment ? (
+                          <span className={`font-medium ${record.adjustment_type === "incentive" ? "text-emerald-600" : "text-red-600"}`}>{record.remarks || (record.adjustment_type === "incentive" ? "Incentive" : "Deduction")}</span>
+                        ) : record.is_sunday_rest ? (
                           <span className="text-purple-600 font-medium">{record.client_name}</span>
                         ) : (
                           <>{record.client_name} • {record.hours_worked}h • {record.start_time}-{record.end_time}</>
@@ -568,12 +642,14 @@ export function LabourDashboard() {
                       </div>
                     </div>
                     <div className="text-right shrink-0 ml-3">
-                      <p className={`text-base font-bold ${record.is_sunday_rest ? "text-purple-600" : "text-green-600"}`}>{formatCurrency(record.total_pay)}</p>
-                      {record.ot_pay > 0 && !record.is_sunday_rest && <p className="text-[10px] font-semibold text-orange-500">+{formatCurrency(record.ot_pay)} OT 🔥</p>}
+                      <p className={`text-base font-bold ${record.is_adjustment ? (record.adjustment_type === "incentive" ? "text-emerald-600" : "text-red-600") : record.is_sunday_rest ? "text-purple-600" : "text-green-600"}`}>
+                        {record.is_adjustment ? (record.adjustment_type === "incentive" ? "+" : "-") : ""}{formatCurrency(Math.abs(record.total_pay))}
+                      </p>
+                      {record.ot_pay > 0 && !record.is_sunday_rest && !record.is_adjustment && <p className="text-[10px] font-semibold text-orange-500">+{formatCurrency(record.ot_pay)} OT 🔥</p>}
                     </div>
                   </div>
                   {/* Mini OT bar if there's OT */}
-                  {record.ot_pay > 0 && record.total_pay > 0 && !record.is_sunday_rest && (
+                  {record.ot_pay > 0 && record.total_pay > 0 && !record.is_sunday_rest && !record.is_adjustment && (
                     <div className="mt-2 h-1.5 rounded-full bg-gray-100 overflow-hidden flex">
                       <div style={{ width: `${Math.round((record.regular_pay / record.total_pay) * 100)}%` }} className="bg-blue-400 rounded-full" />
                       <div style={{ width: `${Math.round((record.ot_pay / record.total_pay) * 100)}%` }} className="bg-orange-400 rounded-full" />

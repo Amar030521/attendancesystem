@@ -51,34 +51,38 @@ function generateFilteredDailyExcelReport(date, rows, filterLabel) {
 }
 
 // ===== Monthly Report =====
-function generateMonthlyExcelReport(month, rows, sundayAutoPayMap) {
+function generateMonthlyExcelReport(month, rows, sundayAutoPayMap, adjustmentsMap) {
   const map = {};
   rows.forEach(r => { if (!map[r.labour_id]) map[r.labour_id] = { name: r.labour_name, designation: r.designation || "", recs: [] }; map[r.labour_id].recs.push(r); });
   const dim = new Date(parseInt(month.split("-")[0]), parseInt(month.split("-")[1]), 0).getDate();
-  const data = [["MONTHLY ATTENDANCE REPORT"], [`Month: ${month}`], [], ["Labour ID", "Name", "Designation", "Days", "Hours", "Regular (AED)", "OT (AED)", "Sunday Rest Pay", "Total (AED)", "Attendance %"]];
-  let grand = 0;
+  const data = [["MONTHLY ATTENDANCE REPORT"], [`Month: ${month}`], [], ["Labour ID", "Name", "Designation", "Days", "Hours", "Regular (AED)", "OT (AED)", "Sunday Rest Pay", "Base Pay", "Incentives", "Deductions", "Net Pay", "Attendance %"]];
+  let grand = 0, grandInc = 0, grandDed = 0;
   Object.entries(map).forEach(([id, info]) => {
     const d = info.recs.length, h = info.recs.reduce((s, r) => s + (r.hours_worked || 0), 0);
     const reg = info.recs.reduce((s, r) => s + (r.regular_pay || 0), 0), ot = info.recs.reduce((s, r) => s + (r.ot_pay || 0), 0), tp = info.recs.reduce((s, r) => s + (r.total_pay || 0), 0);
     const autoP = (sundayAutoPayMap && sundayAutoPayMap[id]) || 0;
-    const totalWithAuto = tp + autoP;
-    grand += totalWithAuto;
-    data.push([Number(id), info.name, info.designation, d, Math.round(h * 100) / 100, Math.round(reg * 100) / 100, Math.round(ot * 100) / 100, Math.round(autoP * 100) / 100, Math.round(totalWithAuto * 100) / 100, ((d / dim) * 100).toFixed(1) + "%"]);
+    const basePay = tp + autoP;
+    const adj = (adjustmentsMap && adjustmentsMap[id]) || { incentives: 0, deductions: 0 };
+    const netPay = basePay + adj.incentives - adj.deductions;
+    grand += basePay; grandInc += adj.incentives; grandDed += adj.deductions;
+    data.push([Number(id), info.name, info.designation, d, Math.round(h * 100) / 100, Math.round(reg * 100) / 100, Math.round(ot * 100) / 100, Math.round(autoP * 100) / 100, Math.round(basePay * 100) / 100, Math.round(adj.incentives * 100) / 100, Math.round(adj.deductions * 100) / 100, Math.round(netPay * 100) / 100, ((d / dim) * 100).toFixed(1) + "%"]);
   });
   // Add labours with zero attendance but have Sunday auto-pay
   if (sundayAutoPayMap) {
     Object.entries(sundayAutoPayMap).forEach(([id, autoP]) => {
       if (!map[id] && autoP > 0 && !id.endsWith("_name") && !id.endsWith("_designation")) {
-        grand += autoP;
+        const adj = (adjustmentsMap && adjustmentsMap[id]) || { incentives: 0, deductions: 0 };
+        const netPay = autoP + adj.incentives - adj.deductions;
+        grand += autoP; grandInc += adj.incentives; grandDed += adj.deductions;
         const labelName = sundayAutoPayMap[id + "_name"] || "Unknown";
         const labelDesig = sundayAutoPayMap[id + "_designation"] || "";
-        data.push([Number(id), labelName, labelDesig, 0, 0, 0, 0, Math.round(autoP * 100) / 100, Math.round(autoP * 100) / 100, "0.0%"]);
+        data.push([Number(id), labelName, labelDesig, 0, 0, 0, 0, Math.round(autoP * 100) / 100, Math.round(autoP * 100) / 100, Math.round(adj.incentives * 100) / 100, Math.round(adj.deductions * 100) / 100, Math.round(netPay * 100) / 100, "0.0%"]);
       }
     });
   }
-  data.push([], ["", "", "", "", "", "", "", "TOTAL", Math.round(grand * 100) / 100, ""]);
+  data.push([], ["", "", "", "", "", "", "", "", "TOTAL", Math.round(grandInc * 100) / 100, Math.round(grandDed * 100) / 100, Math.round((grand + grandInc - grandDed) * 100) / 100, ""]);
   const ws = XLSX.utils.aoa_to_sheet(data);
-  ws["!cols"] = [{ wch: 10 }, { wch: 20 }, { wch: 16 }, { wch: 8 }, { wch: 10 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 12 }];
+  ws["!cols"] = [{ wch: 10 }, { wch: 20 }, { wch: 16 }, { wch: 8 }, { wch: 10 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Monthly Report"); return workbookToBuffer(wb);
 }
 
@@ -144,12 +148,18 @@ function generateSiteExcelReport(site, start, end, rows) {
 
 // ===== Payroll =====
 function generatePayrollExcelReport(month, rows) {
-  const data = [["PAYROLL SUMMARY"], [`Month: ${month}`], [], ["Labour ID", "Name", "Designation", "Monthly Wages", "Days", "Hours", "Regular", "OT", "Sunday", "Holiday", "Total"]];
-  let grand = 0;
-  rows.forEach(r => { grand += r.total_pay || 0; data.push([r.labour_id, r.labour_name, r.designation || "", r.daily_wage, r.days_worked, Math.round((r.total_hours || 0) * 100) / 100, Math.round((r.total_regular || 0) * 100) / 100, Math.round((r.total_ot || 0) * 100) / 100, r.sunday_days, r.holiday_days, Math.round((r.total_pay || 0) * 100) / 100]); });
-  data.push([], ["", "", "", "", "", "", "", "", "", "TOTAL", Math.round(grand * 100) / 100]);
+  const data = [["PAYROLL SUMMARY"], [`Month: ${month}`], [], ["Labour ID", "Name", "Designation", "Monthly Wages", "Days", "Hours", "Regular", "OT", "Sunday", "Holiday", "Base Pay", "Incentives", "Deductions", "Net Pay"]];
+  let grandBase = 0, grandInc = 0, grandDed = 0;
+  rows.forEach(r => {
+    const inc = r.incentives || 0;
+    const ded = r.deductions || 0;
+    const netPay = r.net_pay || ((r.total_pay || 0) + inc - ded);
+    grandBase += r.total_pay || 0; grandInc += inc; grandDed += ded;
+    data.push([r.labour_id, r.labour_name, r.designation || "", r.daily_wage, r.days_worked, Math.round((r.total_hours || 0) * 100) / 100, Math.round((r.total_regular || 0) * 100) / 100, Math.round((r.total_ot || 0) * 100) / 100, r.sunday_days, r.holiday_days, Math.round((r.total_pay || 0) * 100) / 100, Math.round(inc * 100) / 100, Math.round(ded * 100) / 100, Math.round(netPay * 100) / 100]);
+  });
+  data.push([], ["", "", "", "", "", "", "", "", "", "TOTAL", Math.round(grandBase * 100) / 100, Math.round(grandInc * 100) / 100, Math.round(grandDed * 100) / 100, Math.round((grandBase + grandInc - grandDed) * 100) / 100]);
   const ws = XLSX.utils.aoa_to_sheet(data);
-  ws["!cols"] = [{ wch: 10 }, { wch: 20 }, { wch: 16 }, { wch: 14 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 8 }, { wch: 8 }, { wch: 12 }];
+  ws["!cols"] = [{ wch: 10 }, { wch: 20 }, { wch: 16 }, { wch: 14 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 8 }, { wch: 8 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Payroll"); return workbookToBuffer(wb);
 }
 

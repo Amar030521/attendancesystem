@@ -353,8 +353,18 @@ router.get("/reports/monthly", async (req, res) => {
       const { autoPay } = await calcSundayAutoPayForMonth(month, l.id, l.daily_wage, attByLabour[l.id] || [], holidayDates, config);
       if (autoPay > 0) { sundayAutoPayMap[l.id] = autoPay; sundayAutoPayMap[l.id + "_name"] = l.name; sundayAutoPayMap[l.id + "_designation"] = l.designation || ""; }
     }
+
+    // Fetch adjustments for the month
+    const { data: adjData } = await supabase.from("daily_adjustments").select("labour_id, type, amount").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
+    const adjustmentsMap = {};
+    (adjData || []).forEach(a => {
+      if (!adjustmentsMap[a.labour_id]) adjustmentsMap[a.labour_id] = { incentives: 0, deductions: 0 };
+      if (a.type === "incentive") adjustmentsMap[a.labour_id].incentives += Number(a.amount);
+      else adjustmentsMap[a.labour_id].deductions += Number(a.amount);
+    });
+
     if (format === "xlsx") {
-      const buf = generateMonthlyExcelReport(month, rows, sundayAutoPayMap);
+      const buf = generateMonthlyExcelReport(month, rows, sundayAutoPayMap, adjustmentsMap);
       res.setHeader("Content-Disposition", `attachment; filename="Monthly_Summary_${month}.xlsx"`);
       res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
       return res.send(Buffer.from(buf));
@@ -430,24 +440,36 @@ router.get("/reports/payroll", async (req, res) => {
     const { data: labours } = await supabase.from("users").select("id, name, daily_wage, designation").eq("role", "labour").eq("status", "active").order("id");
     const { data: attendance } = await supabase.from("attendance").select("*").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
     const { data: holidays } = await supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
+    const { data: adjustments } = await supabase.from("daily_adjustments").select("labour_id, type, amount").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
     const holidayDates = (holidays || []).map(h => h.date);
     const attByLabour = {};
     (attendance || []).forEach(a => { if (!attByLabour[a.labour_id]) attByLabour[a.labour_id] = []; attByLabour[a.labour_id].push(a); });
+    const adjByLabour = {};
+    (adjustments || []).forEach(a => {
+      if (!adjByLabour[a.labour_id]) adjByLabour[a.labour_id] = { incentives: 0, deductions: 0 };
+      if (a.type === "incentive") adjByLabour[a.labour_id].incentives += Number(a.amount);
+      else adjByLabour[a.labour_id].deductions += Number(a.amount);
+    });
     const rows = [];
     for (const l of (labours || [])) {
       const recs = attByLabour[l.id] || [];
       const attendanceDates = recs.map(r => r.date);
       const { autoPay } = await calcSundayAutoPayForMonth(month, l.id, l.daily_wage, attendanceDates, holidayDates, config);
+      const adj = adjByLabour[l.id] || { incentives: 0, deductions: 0 };
+      const basePay = recs.reduce((s, r) => s + (r.total_pay || 0), 0) + autoPay;
       rows.push({
         labour_id: l.id, labour_name: l.name, designation: l.designation || "", daily_wage: l.daily_wage,
         days_worked: recs.length,
         total_hours: recs.reduce((s, r) => s + (r.hours_worked || 0), 0),
         total_regular: recs.reduce((s, r) => s + (r.regular_pay || 0), 0) + autoPay,
         total_ot: recs.reduce((s, r) => s + (r.ot_pay || 0), 0),
-        total_pay: recs.reduce((s, r) => s + (r.total_pay || 0), 0) + autoPay,
+        total_pay: basePay,
         sunday_days: recs.filter(r => r.is_sunday).length,
         holiday_days: recs.filter(r => r.is_holiday).length,
         sunday_auto_pay: autoPay,
+        incentives: Math.round(adj.incentives * 100) / 100,
+        deductions: Math.round(adj.deductions * 100) / 100,
+        net_pay: Math.round((basePay + adj.incentives - adj.deductions) * 100) / 100,
       });
     }
     if (format === "xlsx") {
@@ -931,6 +953,60 @@ router.delete("/salary-history/:id", async (req, res) => {
     }
 
     return res.json({ message: "Deleted", recalculated: recalcCount });
+  } catch (err) { console.error(err); return res.status(500).json({ message: "Internal server error" }); }
+});
+
+// ===== Daily Adjustments (Incentives & Deductions) =====
+
+// Get adjustments summary for all labours (for admin table)
+router.get("/daily-adjustments-summary", async (req, res) => {
+  try {
+    const { data } = await supabase.from("daily_adjustments").select("labour_id, type, amount");
+    const byLabour = {};
+    (data || []).forEach(r => {
+      if (!byLabour[r.labour_id]) byLabour[r.labour_id] = { incentives: 0, deductions: 0 };
+      if (r.type === "incentive") byLabour[r.labour_id].incentives += Number(r.amount);
+      else byLabour[r.labour_id].deductions += Number(r.amount);
+    });
+    return res.json({ byLabour });
+  } catch (err) { console.error(err); return res.status(500).json({ message: "Internal server error" }); }
+});
+
+// Get adjustments for a specific labour
+router.get("/daily-adjustments/:labourId", async (req, res) => {
+  try {
+    const { data } = await supabase.from("daily_adjustments").select("*").eq("labour_id", req.params.labourId).order("date", { ascending: false });
+    const totalIncentives = (data || []).filter(r => r.type === "incentive").reduce((s, r) => s + Number(r.amount), 0);
+    const totalDeductions = (data || []).filter(r => r.type === "deduction").reduce((s, r) => s + Number(r.amount), 0);
+    return res.json({
+      records: data || [],
+      totalIncentives: Math.round(totalIncentives * 100) / 100,
+      totalDeductions: Math.round(totalDeductions * 100) / 100,
+      net: Math.round((totalIncentives - totalDeductions) * 100) / 100,
+    });
+  } catch (err) { console.error(err); return res.status(500).json({ message: "Internal server error" }); }
+});
+
+// Add a daily adjustment
+router.post("/daily-adjustments", async (req, res) => {
+  try {
+    const { labour_id, date, type, amount, remarks } = req.body;
+    if (!labour_id || !date || !type || !amount) return res.status(400).json({ message: "labour_id, date, type, and amount required" });
+    if (!["incentive", "deduction"].includes(type)) return res.status(400).json({ message: "type must be 'incentive' or 'deduction'" });
+    if (Number(amount) <= 0) return res.status(400).json({ message: "Amount must be positive" });
+    const { data, error } = await supabase.from("daily_adjustments").insert({
+      labour_id, date, type, amount: Number(amount), remarks: remarks || null, created_by: req.user.id,
+    }).select().single();
+    if (error) throw error;
+    return res.status(201).json(data);
+  } catch (err) { console.error(err); return res.status(500).json({ message: "Internal server error" }); }
+});
+
+// Delete a daily adjustment
+router.delete("/daily-adjustments/:id", async (req, res) => {
+  try {
+    await supabase.from("daily_adjustments").delete().eq("id", req.params.id);
+    return res.json({ message: "Deleted" });
   } catch (err) { console.error(err); return res.status(500).json({ message: "Internal server error" }); }
 });
 
