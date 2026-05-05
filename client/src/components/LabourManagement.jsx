@@ -445,7 +445,6 @@ export function LabourManagement() {
               <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Designation</th>
               <th className="px-3 py-3 text-right text-xs font-semibold text-gray-600">Monthly Wages</th>
               <th className="px-3 py-3 text-right text-xs font-semibold text-gray-600">Advance</th>
-              <th className="px-3 py-3 text-center text-xs font-semibold text-gray-600">Incentive / Deduction</th>
               <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Phone</th>
               <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Passport</th>
               <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Joining</th>
@@ -454,7 +453,7 @@ export function LabourManagement() {
               <th className="px-3 py-3 text-center text-xs font-semibold text-gray-600">Action</th>
             </tr></thead>
             <tbody className="divide-y divide-gray-100">
-              {pagedLabours.length === 0 ? <tr><td colSpan="12" className="px-4 py-8 text-center text-gray-400">No labours found</td></tr> :
+              {pagedLabours.length === 0 ? <tr><td colSpan="11" className="px-4 py-8 text-center text-gray-400">No labours found</td></tr> :
                 pagedLabours.map(l => (
                   <tr key={l.id} className="hover:bg-gray-50/50">
                     <td className="px-3 py-3 font-medium">{l.id}</td>
@@ -467,17 +466,6 @@ export function LabourManagement() {
                     <td className="px-3 py-3 text-xs text-gray-600">{l.designation || "-"}</td>
                     <td className="px-3 py-3 text-right">AED {Number(l.daily_wage).toLocaleString()}</td>
                     <td className="px-3 py-3 text-right">{advanceTotals[l.id] > 0 ? <button onClick={() => openAdvanceModal(l)} className="text-red-600 font-semibold hover:underline">AED {Number(advanceTotals[l.id]).toLocaleString()}</button> : <button onClick={() => openAdvanceModal(l)} className="text-gray-400 hover:text-blue-600 text-xs">+ Add</button>}</td>
-                    <td className="px-3 py-3 text-center">
-                      <button onClick={() => openAdjustmentModal(l)} className="text-xs hover:underline">
-                        {adjustmentSummary[l.id] ? (
-                          <span>
-                            {adjustmentSummary[l.id].incentives > 0 && <span className="text-emerald-600 font-semibold">+{Number(adjustmentSummary[l.id].incentives).toLocaleString()}</span>}
-                            {adjustmentSummary[l.id].incentives > 0 && adjustmentSummary[l.id].deductions > 0 && <span className="text-gray-400 mx-1">/</span>}
-                            {adjustmentSummary[l.id].deductions > 0 && <span className="text-red-600 font-semibold">-{Number(adjustmentSummary[l.id].deductions).toLocaleString()}</span>}
-                          </span>
-                        ) : <span className="text-gray-400">+ Add</span>}
-                      </button>
-                    </td>
                     <td className="px-3 py-3">{l.phone || "-"}</td>
                     <td className="px-3 py-3">{l.passport_id || "-"}</td>
                     <td className="px-3 py-3">{fmtDate(l.date_of_joining)}</td>

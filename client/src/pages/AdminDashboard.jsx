@@ -41,6 +41,7 @@ const NAV_ITEMS = [
   { id: "overview", label: "Overview", icon: "📈" },
   { id: "daily", label: "Daily View", icon: "📋" },
   { id: "attendance", label: "Attendance", icon: "👥" },
+  { id: "adjustments", label: "Incentive / Deduction", icon: "💰" },
   { id: "reports", label: "Reports", icon: "📊" },
   { id: "settings", label: "Settings", icon: "⚙️" },
 ];
@@ -60,6 +61,16 @@ export function AdminDashboard() {
   const [settingsTab, setSettingsTab] = useState("labours");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+
+  // Adjustments state
+  const [adjLabours, setAdjLabours] = useState([]);
+  const [adjSelectedLabour, setAdjSelectedLabour] = useState(null);
+  const [adjRecords, setAdjRecords] = useState([]);
+  const [adjTotals, setAdjTotals] = useState({ incentives: 0, deductions: 0 });
+  const [adjLoading, setAdjLoading] = useState(false);
+  const [adjForm, setAdjForm] = useState({ type: "incentive", amount: "", date: new Date().toISOString().slice(0, 10), remarks: "" });
+  const [adjSaving, setAdjSaving] = useState(false);
+  const [adjSearch, setAdjSearch] = useState("");
   const [analytics, setAnalytics] = useState(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
 
@@ -504,6 +515,151 @@ export function AdminDashboard() {
   // ════════════════════════════════════════
   // RENDER: SETTINGS (with mobile popup menu)
   // ════════════════════════════════════════
+  // ===== Adjustments Tab Functions =====
+  async function loadAdjLabours() {
+    try { const { data } = await api.get("/admin/labours"); setAdjLabours(data || []); } catch (err) { console.error(err); }
+  }
+  async function loadAdjRecords(labourId) {
+    try {
+      setAdjLoading(true);
+      const { data } = await api.get(`/admin/daily-adjustments/${labourId}`);
+      setAdjRecords(data.records || []);
+      setAdjTotals({ incentives: data.totalIncentives || 0, deductions: data.totalDeductions || 0 });
+    } catch (err) { console.error(err); }
+    finally { setAdjLoading(false); }
+  }
+  function selectAdjLabour(labour) {
+    setAdjSelectedLabour(labour);
+    setAdjForm({ type: "incentive", amount: "", date: new Date().toISOString().slice(0, 10), remarks: "" });
+    loadAdjRecords(labour.id);
+  }
+  async function handleAddAdj() {
+    if (!adjForm.amount || Number(adjForm.amount) <= 0) { alert("Enter a valid amount"); return; }
+    if (!adjForm.date) { alert("Select a date"); return; }
+    if (!adjForm.remarks) { alert("Enter remarks"); return; }
+    try {
+      setAdjSaving(true);
+      await api.post("/admin/daily-adjustments", {
+        labour_id: adjSelectedLabour.id, date: adjForm.date, type: adjForm.type,
+        amount: Number(adjForm.amount), remarks: adjForm.remarks,
+      });
+      setAdjForm({ type: "incentive", amount: "", date: new Date().toISOString().slice(0, 10), remarks: "" });
+      await loadAdjRecords(adjSelectedLabour.id);
+    } catch (err) { alert(err.response?.data?.message || "Failed"); }
+    finally { setAdjSaving(false); }
+  }
+  async function handleDeleteAdj(id) {
+    if (!window.confirm("Delete this entry?")) return;
+    try { await api.delete(`/admin/daily-adjustments/${id}`); await loadAdjRecords(adjSelectedLabour.id); }
+    catch (err) { alert("Failed"); }
+  }
+
+  const renderAdjustments = () => {
+    const filteredAdjLabours = adjLabours.filter(l =>
+      l.name.toLowerCase().includes(adjSearch.toLowerCase()) || String(l.id).includes(adjSearch)
+    );
+    return (
+      <div className="space-y-4">
+        <h2 className="text-lg font-semibold">Incentive & Deduction Management</h2>
+        <p className="text-sm text-gray-500">Add incentives and deductions for each labour. These are reflected in their login history and payroll reports.</p>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Left: Labour selector */}
+          <div className="md:col-span-1 bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+            <div className="p-3 border-b border-gray-100">
+              <input type="text" placeholder="Search labour..." value={adjSearch} onChange={e => setAdjSearch(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm" onFocus={() => { if (adjLabours.length === 0) loadAdjLabours(); }} />
+            </div>
+            <div className="max-h-[60vh] overflow-y-auto divide-y divide-gray-50">
+              {filteredAdjLabours.length === 0 ? (
+                <p className="text-center text-gray-400 py-8 text-sm">{adjLabours.length === 0 ? "Click search to load labours" : "No results"}</p>
+              ) : filteredAdjLabours.map(l => (
+                <button key={l.id} onClick={() => selectAdjLabour(l)}
+                  className={`w-full text-left px-3 py-2.5 flex items-center gap-2.5 hover:bg-gray-50 ${adjSelectedLabour?.id === l.id ? "bg-blue-50 border-l-4 border-blue-500" : ""}`}>
+                  <Avatar name={l.name} photoUrl={l.photo_url} size="sm" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-900 truncate">{l.name}</p>
+                    <p className="text-[10px] text-gray-400">#{l.id} • {l.designation || "No designation"}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Right: Selected labour's adjustments */}
+          <div className="md:col-span-2">
+            {!adjSelectedLabour ? (
+              <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-8 text-center">
+                <p className="text-gray-400 text-sm">← Select a labour to manage incentives & deductions</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {/* Header */}
+                <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+                  <div className="flex items-center gap-3 mb-3">
+                    <Avatar name={adjSelectedLabour.name} photoUrl={adjSelectedLabour.photo_url} size="md" />
+                    <div>
+                      <h3 className="text-base font-bold text-gray-900">{adjSelectedLabour.name}</h3>
+                      <p className="text-xs text-gray-400">#{adjSelectedLabour.id} • {adjSelectedLabour.designation || "No designation"} • AED {Number(adjSelectedLabour.daily_wage).toLocaleString()}/mo</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-3">
+                    {adjTotals.incentives > 0 && <div className="flex-1 bg-emerald-50 rounded-lg px-3 py-2 text-center"><p className="text-[10px] text-emerald-600 font-medium">Total Incentives</p><p className="text-base font-bold text-emerald-700">AED {adjTotals.incentives.toLocaleString()}</p></div>}
+                    {adjTotals.deductions > 0 && <div className="flex-1 bg-red-50 rounded-lg px-3 py-2 text-center"><p className="text-[10px] text-red-600 font-medium">Total Deductions</p><p className="text-base font-bold text-red-700">AED {adjTotals.deductions.toLocaleString()}</p></div>}
+                    <div className="flex-1 bg-blue-50 rounded-lg px-3 py-2 text-center"><p className="text-[10px] text-blue-600 font-medium">Net</p><p className={`text-base font-bold ${(adjTotals.incentives - adjTotals.deductions) >= 0 ? "text-emerald-700" : "text-red-700"}`}>AED {(adjTotals.incentives - adjTotals.deductions).toLocaleString()}</p></div>
+                  </div>
+                </div>
+
+                {/* Add form */}
+                <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 space-y-3">
+                  <p className="text-sm font-semibold text-gray-700">Add New Entry</p>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">Type</label>
+                      <select value={adjForm.type} onChange={e => setAdjForm(f => ({ ...f, type: e.target.value }))} className="w-full px-3 py-2 border rounded-lg text-sm">
+                        <option value="incentive">🎁 Incentive</option>
+                        <option value="deduction">⚠️ Deduction</option>
+                      </select>
+                    </div>
+                    <div><label className="block text-xs text-gray-500 mb-1">Amount (AED)</label><input type="number" min="1" value={adjForm.amount} onChange={e => setAdjForm(f => ({ ...f, amount: e.target.value }))} className="w-full px-3 py-2 border rounded-lg text-sm" placeholder="100" /></div>
+                    <div><label className="block text-xs text-gray-500 mb-1">Date</label><input type="date" value={adjForm.date} onChange={e => setAdjForm(f => ({ ...f, date: e.target.value }))} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
+                    <div className="flex items-end"><button onClick={handleAddAdj} disabled={adjSaving} className={`w-full py-2 text-white rounded-lg text-sm font-semibold disabled:opacity-50 ${adjForm.type === "incentive" ? "bg-emerald-600 hover:bg-emerald-700" : "bg-red-600 hover:bg-red-700"}`}>{adjSaving ? "..." : "Add"}</button></div>
+                  </div>
+                  <div><label className="block text-xs text-gray-500 mb-1">Remarks</label><input type="text" value={adjForm.remarks} onChange={e => setAdjForm(f => ({ ...f, remarks: e.target.value }))} className="w-full px-3 py-2 border rounded-lg text-sm" placeholder="e.g. Incentive for supervisor work, Leave without informing" /></div>
+                </div>
+
+                {/* History */}
+                <div className="bg-white rounded-xl border border-gray-100 shadow-sm">
+                  <div className="px-4 py-3 border-b border-gray-100"><p className="text-sm font-semibold text-gray-700">History</p></div>
+                  {adjLoading ? <div className="p-8 text-center text-gray-400 text-sm">Loading...</div> :
+                    adjRecords.length === 0 ? <div className="p-8 text-center text-gray-400 text-sm">No entries recorded for this labour</div> :
+                    <div className="divide-y divide-gray-50 max-h-[40vh] overflow-y-auto">
+                      {adjRecords.map(r => (
+                        <div key={r.id} className="px-4 py-3 flex items-center justify-between hover:bg-gray-50/50">
+                          <div className="flex items-center gap-3">
+                            <span className={`text-sm font-bold ${r.type === "incentive" ? "text-emerald-600" : "text-red-600"}`}>{r.type === "incentive" ? "+" : "-"}AED {Number(r.amount).toLocaleString()}</span>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${r.type === "incentive" ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>{r.type}</span>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <div className="text-right">
+                              <p className="text-xs text-gray-500">{new Date(r.date).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}</p>
+                              {r.remarks && <p className="text-[11px] text-gray-400 max-w-[200px] truncate">{r.remarks}</p>}
+                            </div>
+                            <button onClick={() => handleDeleteAdj(r.id)} className="text-xs text-red-400 hover:text-red-600 p-1">✕</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  }
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const renderSettings = () => (
     <div>
       {/* Desktop: pill buttons */}
@@ -590,6 +746,7 @@ export function AdminDashboard() {
             {activeTab === "overview" && renderOverview()}
             {activeTab === "daily" && renderDaily()}
             {activeTab === "attendance" && renderPA()}
+            {activeTab === "adjustments" && renderAdjustments()}
             {activeTab === "reports" && renderReports()}
             {activeTab === "settings" && renderSettings()}
           </div>
