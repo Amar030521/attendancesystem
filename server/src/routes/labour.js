@@ -7,6 +7,33 @@ const { uaeNow, uaeToday, uaeYesterday, uaeDateStr } = require("../utils/uaeTime
 const router = express.Router();
 router.use(authMiddleware, requireRole("labour"));
 
+async function getSalaryOnDate(labourId, targetDate) {
+  const { data: historyEntry } = await supabase
+    .from("salary_history").select("salary").eq("labour_id", labourId)
+    .lte("effective_date", targetDate).order("effective_date", { ascending: false }).limit(1).single();
+  if (historyEntry) return Number(historyEntry.salary);
+  const { data: user } = await supabase.from("users").select("daily_wage").eq("id", labourId).single();
+  return user ? Number(user.daily_wage) : 0;
+}
+
+async function getSalaryMapForDates(labourId, dates) {
+  if (!dates || dates.length === 0) return {};
+  const { data: history } = await supabase.from("salary_history").select("salary, effective_date")
+    .eq("labour_id", labourId).order("effective_date", { ascending: true });
+  if (!history || history.length === 0) {
+    const { data: user } = await supabase.from("users").select("daily_wage").eq("id", labourId).single();
+    const wage = user ? Number(user.daily_wage) : 0;
+    const map = {}; dates.forEach(d => { map[d] = wage; }); return map;
+  }
+  const map = {};
+  dates.forEach(d => {
+    let salary = Number(history[0].salary);
+    for (const entry of history) { if (entry.effective_date <= d) salary = Number(entry.salary); else break; }
+    map[d] = salary;
+  });
+  return map;
+}
+
 function toDateStr(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
@@ -29,16 +56,17 @@ function getSundaysAndHolidaysInMonth(monthStr, holidayDates) {
   return dates;
 }
 
-function calcSundayAutoPayForMonth(monthStr, dailyWage, attendanceDates, holidayDates, config) {
+async function calcSundayAutoPayForMonth(monthStr, labourId, dailyWageFallback, attendanceDates, holidayDates, config) {
   const allSundaysHolidays = getSundaysAndHolidaysInMonth(monthStr, holidayDates);
   const attendedSet = new Set(attendanceDates);
-  let autoPay = 0;
-  let autoPayDays = 0;
-  for (const dateStr of allSundaysHolidays) {
-    if (!attendedSet.has(dateStr)) {
-      autoPay += calculateSundayAutoPay(dailyWage, dateStr, config);
-      autoPayDays++;
-    }
+  const unattendedDates = allSundaysHolidays.filter(d => !attendedSet.has(d));
+  if (unattendedDates.length === 0) return { autoPay: 0, autoPayDays: 0 };
+  const salaryMap = await getSalaryMapForDates(labourId, unattendedDates);
+  let autoPay = 0, autoPayDays = 0;
+  for (const dateStr of unattendedDates) {
+    const wage = salaryMap[dateStr] || dailyWageFallback;
+    autoPay += calculateSundayAutoPay(wage, dateStr, config);
+    autoPayDays++;
   }
   return { autoPay: Math.round(autoPay * 100) / 100, autoPayDays };
 }
@@ -79,7 +107,7 @@ router.get("/dashboard", async (req, res) => {
     const { data: holidays } = await supabase.from("holidays").select("date").gte("date", monthStart).lt("date", `${uae.year}-${String(uae.month + 1).padStart(2, "0")}-01`);
     const holidayDates = (holidays || []).map(h => h.date);
     const attendanceDates = mr.map(r => r.date);
-    const { autoPay, autoPayDays } = calcSundayAutoPayForMonth(monthStr, userInfo?.daily_wage || 0, attendanceDates, holidayDates, config);
+    const { autoPay, autoPayDays } = await calcSundayAutoPayForMonth(monthStr, labourId, userInfo?.daily_wage || 0, attendanceDates, holidayDates, config);
 
     const monthSummary = {
       daysWorked: mr.length,
@@ -209,9 +237,10 @@ router.post("/checkin", async (req, res) => {
     const config = {}; (cfgRows || []).forEach(r => { config[r.key] = r.value; });
     const { data: holidays } = await supabase.from("holidays").select("date");
     const { data: labour } = await supabase.from("users").select("daily_wage, designation").eq("id", labourId).single();
-    if (!labour || labour.daily_wage <= 0) return res.status(400).json({ message: "Labour wage must be a positive number" });
+    const salary = await getSalaryOnDate(labourId, workDate);
+    if (!salary || salary <= 0) return res.status(400).json({ message: "Labour wage must be a positive number" });
 
-    const result = calculatePayment(labour.daily_wage, start_time, end_time, workDate, holidays || [], config, labour.designation);
+    const result = calculatePayment(salary, start_time, end_time, workDate, holidays || [], config, labour?.designation);
 
     const { data: inserted, error } = await supabase.from("attendance").insert({
       labour_id: labourId, date: workDate, client_id, site_id, start_time, end_time,

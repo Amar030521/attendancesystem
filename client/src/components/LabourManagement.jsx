@@ -91,6 +91,12 @@ export function LabourManagement() {
   const [advanceSaving, setAdvanceSaving] = useState(false);
   const [advanceTotals, setAdvanceTotals] = useState({});
 
+  // Salary history state
+  const [salaryHistory, setSalaryHistory] = useState([]);
+  const [salaryHistoryLoading, setSalaryHistoryLoading] = useState(false);
+  const [salaryForm, setSalaryForm] = useState({ salary: "", effective_date: new Date().toISOString().slice(0, 10), notes: "" });
+  const [salarySaving, setSalarySaving] = useState(false);
+
   useEffect(() => { loadLabours(); loadAdvanceSummary(); }, []);
 
   async function loadLabours() {
@@ -116,6 +122,50 @@ export function LabourManagement() {
     finally { setAdvanceLoading(false); }
   }
 
+  async function loadSalaryHistory(labourId) {
+    try {
+      setSalaryHistoryLoading(true);
+      const { data } = await api.get(`/admin/salary-history/${labourId}`);
+      setSalaryHistory(data || []);
+    } catch (err) { console.error(err); }
+    finally { setSalaryHistoryLoading(false); }
+  }
+
+  async function handleAddSalaryChange() {
+    if (!salaryForm.salary || Number(salaryForm.salary) <= 0) { alert("Enter a valid salary amount"); return; }
+    if (!salaryForm.effective_date) { alert("Select an effective date"); return; }
+    if (!currentLabour) return;
+    try {
+      setSalarySaving(true);
+      await api.post("/admin/salary-history", {
+        labour_id: currentLabour.id,
+        salary: Number(salaryForm.salary),
+        effective_date: salaryForm.effective_date,
+        notes: salaryForm.notes,
+      });
+      setSalaryForm({ salary: "", effective_date: new Date().toISOString().slice(0, 10), notes: "" });
+      await loadSalaryHistory(currentLabour.id);
+      await loadLabours(); // refresh daily_wage in table
+      // Update currentLabour with new salary
+      const updatedLabours = (await api.get("/admin/labours")).data;
+      const updated = updatedLabours.find(l => l.id === currentLabour.id);
+      if (updated) { setCurrentLabour(updated); setFormData(f => ({ ...f, daily_wage: updated.daily_wage })); }
+    } catch (err) { alert(err.response?.data?.message || "Failed to add salary change"); }
+    finally { setSalarySaving(false); }
+  }
+
+  async function handleDeleteSalaryEntry(id) {
+    if (!window.confirm("Delete this salary history entry?")) return;
+    try {
+      await api.delete(`/admin/salary-history/${id}`);
+      await loadSalaryHistory(currentLabour.id);
+      await loadLabours();
+      const updatedLabours = (await api.get("/admin/labours")).data;
+      const updated = updatedLabours.find(l => l.id === currentLabour.id);
+      if (updated) { setCurrentLabour(updated); setFormData(f => ({ ...f, daily_wage: updated.daily_wage })); }
+    } catch (err) { alert("Failed to delete"); }
+  }
+
   function openAddModal() {
     setModalMode("add");
     setFormData({ name: "", daily_wage: "", phone: "", passport_id: "", designation: "", date_of_joining: "" });
@@ -128,6 +178,7 @@ export function LabourManagement() {
     setFormData({ name: labour.name, daily_wage: labour.daily_wage, phone: labour.phone || "", passport_id: labour.passport_id || "", designation: labour.designation || "", date_of_joining: labour.date_of_joining || "", status: labour.status });
     setShowModal(true);
     setDetailLabour(null);
+    loadSalaryHistory(labour.id);
   }
   function closeModal() {
     setShowModal(false);
@@ -491,6 +542,39 @@ export function LabourManagement() {
                 <button type="submit" className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-semibold">{modalMode === "add" ? "Add Labour" : "Save Changes"}</button>
               </div>
             </form>
+
+            {/* Salary History section - only in edit mode */}
+            {modalMode === "edit" && currentLabour && (
+              <div className="px-6 py-4 border-t border-gray-100">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">💰 Salary History</p>
+                <div className="space-y-3 mb-3">
+                  <p className="text-xs text-gray-500">Record a salary change with an effective date. Past attendance uses the salary that was active on that date.</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div><label className="block text-xs text-gray-500 mb-1">New Salary (AED) *</label><input type="number" min="1" value={salaryForm.salary} onChange={e => setSalaryForm(f => ({ ...f, salary: e.target.value }))} className="w-full px-3 py-2 border rounded-lg text-sm" placeholder="e.g. 1600" /></div>
+                    <div><label className="block text-xs text-gray-500 mb-1">Effective From *</label><input type="date" value={salaryForm.effective_date} onChange={e => setSalaryForm(f => ({ ...f, effective_date: e.target.value }))} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
+                  </div>
+                  <div><label className="block text-xs text-gray-500 mb-1">Notes (optional)</label><input type="text" value={salaryForm.notes} onChange={e => setSalaryForm(f => ({ ...f, notes: e.target.value }))} className="w-full px-3 py-2 border rounded-lg text-sm" placeholder="e.g. Annual increment, Promotion" /></div>
+                  <button type="button" onClick={handleAddSalaryChange} disabled={salarySaving} className="w-full py-2 bg-emerald-600 text-white rounded-lg text-sm font-semibold disabled:opacity-50">{salarySaving ? "Saving..." : "+ Record Salary Change"}</button>
+                </div>
+                {salaryHistoryLoading ? <p className="text-center text-gray-400 py-3 text-sm">Loading...</p> :
+                  salaryHistory.length === 0 ? <p className="text-center text-gray-400 py-3 text-sm">No salary history recorded</p> :
+                  <div className="space-y-2 max-h-40 overflow-y-auto">
+                    {salaryHistory.map(s => (
+                      <div key={s.id} className="flex items-center justify-between py-2 px-3 bg-gray-50 rounded-lg">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-bold text-emerald-700">AED {Number(s.salary).toLocaleString()}</span>
+                            <span className="text-[10px] text-gray-400">from {new Date(s.effective_date).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}</span>
+                          </div>
+                          {s.notes && <p className="text-xs text-gray-500 mt-0.5">{s.notes}</p>}
+                        </div>
+                        <button type="button" onClick={() => handleDeleteSalaryEntry(s.id)} className="text-xs text-red-400 hover:text-red-600 px-2 py-1">✕</button>
+                      </div>
+                    ))}
+                  </div>
+                }
+              </div>
+            )}
 
             {/* Other actions section - only in edit mode */}
             {modalMode === "edit" && currentLabour && (

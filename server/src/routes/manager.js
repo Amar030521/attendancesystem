@@ -23,11 +23,45 @@ function getSundaysAndHolidaysInMonth(monthStr, holidayDates) {
   return dates;
 }
 
-function calcSundayAutoPayForMonth(monthStr, dailyWage, attendanceDates, holidayDates, config) {
+async function getSalaryOnDate(labourId, targetDate) {
+  const { data: historyEntry } = await supabase
+    .from("salary_history").select("salary").eq("labour_id", labourId)
+    .lte("effective_date", targetDate).order("effective_date", { ascending: false }).limit(1).single();
+  if (historyEntry) return Number(historyEntry.salary);
+  const { data: user } = await supabase.from("users").select("daily_wage").eq("id", labourId).single();
+  return user ? Number(user.daily_wage) : 0;
+}
+
+async function getSalaryMapForDates(labourId, dates) {
+  if (!dates || dates.length === 0) return {};
+  const { data: history } = await supabase.from("salary_history").select("salary, effective_date")
+    .eq("labour_id", labourId).order("effective_date", { ascending: true });
+  if (!history || history.length === 0) {
+    const { data: user } = await supabase.from("users").select("daily_wage").eq("id", labourId).single();
+    const wage = user ? Number(user.daily_wage) : 0;
+    const map = {}; dates.forEach(d => { map[d] = wage; }); return map;
+  }
+  const map = {};
+  dates.forEach(d => {
+    let salary = Number(history[0].salary);
+    for (const entry of history) { if (entry.effective_date <= d) salary = Number(entry.salary); else break; }
+    map[d] = salary;
+  });
+  return map;
+}
+
+async function calcSundayAutoPayForMonth(monthStr, labourId, dailyWageFallback, attendanceDates, holidayDates, config) {
   const allSH = getSundaysAndHolidaysInMonth(monthStr, holidayDates);
   const attendedSet = new Set(attendanceDates);
+  const unattendedDates = allSH.filter(d => !attendedSet.has(d));
+  if (unattendedDates.length === 0) return { autoPay: 0, autoPayDays: 0 };
+  const salaryMap = await getSalaryMapForDates(labourId, unattendedDates);
   let autoPay = 0, autoPayDays = 0;
-  for (const ds of allSH) { if (!attendedSet.has(ds)) { autoPay += calculateSundayAutoPay(dailyWage, ds, config); autoPayDays++; } }
+  for (const dateStr of unattendedDates) {
+    const wage = salaryMap[dateStr] || dailyWageFallback;
+    autoPay += calculateSundayAutoPay(wage, dateStr, config);
+    autoPayDays++;
+  }
   return { autoPay: Math.round(autoPay * 100) / 100, autoPayDays };
 }
 router.use(authMiddleware, requireRole("manager"));
@@ -79,14 +113,15 @@ router.put("/attendance/:id", async (req, res) => {
     const { data: existing } = await supabase.from("attendance").select("*").eq("id", req.params.id).single();
     if (!existing) return res.status(404).json({ message: "Not found" });
 
-    const { data: labour } = await supabase.from("users").select("daily_wage, designation").eq("id", existing.labour_id).single();
+    const { data: labour } = await supabase.from("users").select("designation").eq("id", existing.labour_id).single();
     const { data: cfgRows } = await supabase.from("config").select("key, value");
     const config = {}; (cfgRows || []).forEach(r => { config[r.key] = r.value; });
     const { data: holidays } = await supabase.from("holidays").select("date");
     const holidayList = (holidays || []).map(h => h.date);
     const st = start_time || existing.start_time;
     const et = end_time || existing.end_time;
-    const pay = calculatePayment(labour?.daily_wage || 0, st, et, existing.date, holidayList, config, labour?.designation || "");
+    const salary = await getSalaryOnDate(existing.labour_id, existing.date);
+    const pay = calculatePayment(salary, st, et, existing.date, holidayList, config, labour?.designation || "");
 
     const { data, error } = await supabase.from("attendance").update({
       client_id: client_id || existing.client_id, site_id: site_id || existing.site_id,
@@ -127,13 +162,14 @@ router.post("/present-absent/mark-present", async (req, res) => {
     if (!labour_id || !date || !client_id || !site_id) return res.status(400).json({ message: "labour_id, date, client_id, site_id required" });
     const { data: dup } = await supabase.from("attendance").select("id").eq("labour_id", labour_id).eq("date", date).single();
     if (dup) return res.status(400).json({ message: "Already has attendance for this date" });
-    const { data: labour } = await supabase.from("users").select("daily_wage, designation").eq("id", labour_id).single();
+    const { data: labour } = await supabase.from("users").select("designation").eq("id", labour_id).single();
     const { data: cfgRows } = await supabase.from("config").select("key, value");
     const config = {}; (cfgRows || []).forEach(r => { config[r.key] = r.value; });
     const { data: holidays } = await supabase.from("holidays").select("date");
     const st = start_time || config.default_start || "10:00";
     const et = end_time || config.default_end || "20:00";
-    const pay = calculatePayment(labour?.daily_wage || 0, st, et, date, (holidays || []).map(h => h.date), config, labour?.designation || "");
+    const salary = await getSalaryOnDate(labour_id, date);
+    const pay = calculatePayment(salary, st, et, date, (holidays || []).map(h => h.date), config, labour?.designation || "");
     const { data, error } = await supabase.from("attendance").insert({ labour_id, date, client_id, site_id, start_time: st, end_time: et, ...pay, admin_verified: true }).select().single();
     if (error) throw error;
     res.status(201).json(data);
@@ -187,11 +223,11 @@ router.get("/reports/monthly", async (req, res) => {
     const attByLabour = {};
     rows.forEach(r => { if (!attByLabour[r.labour_id]) attByLabour[r.labour_id] = []; attByLabour[r.labour_id].push(r.date); });
     const sundayAutoPayMap = {};
-    (labours || []).forEach(l => {
+    for (const l of (labours || [])) {
       const attendanceDates = attByLabour[l.id] || [];
-      const { autoPay } = calcSundayAutoPayForMonth(month, l.daily_wage, attendanceDates, holidayDates, config);
+      const { autoPay } = await calcSundayAutoPayForMonth(month, l.id, l.daily_wage, attendanceDates, holidayDates, config);
       if (autoPay > 0) { sundayAutoPayMap[l.id] = autoPay; sundayAutoPayMap[l.id + "_name"] = l.name; sundayAutoPayMap[l.id + "_designation"] = l.designation || ""; }
-    });
+    }
     if (format === "xlsx") { const buf = generateMonthlyExcelReport(month, rows, sundayAutoPayMap); res.setHeader("Content-Disposition", `attachment; filename="Monthly_${month}.xlsx"`); res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"); return res.send(Buffer.from(buf)); }
     res.json(rows);
   } catch (err) { res.status(500).json({ message: "Internal server error" }); }
@@ -207,16 +243,13 @@ router.get("/reports/payroll", async (req, res) => {
     const { data: holidays } = await supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
     const holidayDates = (holidays || []).map(h => h.date);
     const attByLabour = {}; (attendance || []).forEach(a => { if (!attByLabour[a.labour_id]) attByLabour[a.labour_id] = []; attByLabour[a.labour_id].push(a); });
-    const rows = (labours || []).map(l => {
+    const rows = [];
+    for (const l of (labours || [])) {
       const recs = attByLabour[l.id] || [];
       const attendanceDates = recs.map(r => r.date);
-      const allSH = getSundaysAndHolidaysInMonth(month, holidayDates);
-      const attendedSet = new Set(attendanceDates);
-      let autoPay = 0;
-      for (const ds of allSH) { if (!attendedSet.has(ds)) autoPay += calculateSundayAutoPay(l.daily_wage, ds, config); }
-      autoPay = Math.round(autoPay * 100) / 100;
-      return { labour_id: l.id, labour_name: l.name, designation: l.designation || "", daily_wage: l.daily_wage, days_worked: recs.length, total_hours: recs.reduce((s, r) => s + (r.hours_worked || 0), 0), total_regular: recs.reduce((s, r) => s + (r.regular_pay || 0), 0) + autoPay, total_ot: recs.reduce((s, r) => s + (r.ot_pay || 0), 0), total_pay: recs.reduce((s, r) => s + (r.total_pay || 0), 0) + autoPay, sunday_days: recs.filter(r => r.is_sunday).length, holiday_days: recs.filter(r => r.is_holiday).length };
-    });
+      const { autoPay } = await calcSundayAutoPayForMonth(month, l.id, l.daily_wage, attendanceDates, holidayDates, config);
+      rows.push({ labour_id: l.id, labour_name: l.name, designation: l.designation || "", daily_wage: l.daily_wage, days_worked: recs.length, total_hours: recs.reduce((s, r) => s + (r.hours_worked || 0), 0), total_regular: recs.reduce((s, r) => s + (r.regular_pay || 0), 0) + autoPay, total_ot: recs.reduce((s, r) => s + (r.ot_pay || 0), 0), total_pay: recs.reduce((s, r) => s + (r.total_pay || 0), 0) + autoPay, sunday_days: recs.filter(r => r.is_sunday).length, holiday_days: recs.filter(r => r.is_holiday).length });
+    }
     if (format === "xlsx") { const buf = generatePayrollExcelReport(month, rows); res.setHeader("Content-Disposition", `attachment; filename="Payroll_${month}.xlsx"`); res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"); return res.send(Buffer.from(buf)); }
     res.json(rows);
   } catch (err) { res.status(500).json({ message: "Internal server error" }); }
@@ -233,7 +266,7 @@ router.get("/reports/labour/:id", async (req, res) => {
     const { data: holidays } = await supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
     const holidayDates = (holidays || []).map(h => h.date);
     const attendanceDates = rows.map(r => r.date);
-    const { autoPay } = calcSundayAutoPayForMonth(month, user?.daily_wage || 0, attendanceDates, holidayDates, config);
+    const { autoPay } = await calcSundayAutoPayForMonth(month, id, user?.daily_wage || 0, attendanceDates, holidayDates, config);
     if (format === "xlsx") { const buf = generateLabourExcelReport(user, month, rows, autoPay); res.setHeader("Content-Disposition", `attachment; filename="Labour_${id}_${month}.xlsx"`); res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"); return res.send(Buffer.from(buf)); }
     res.json(rows);
   } catch (err) { res.status(500).json({ message: "Internal server error" }); }

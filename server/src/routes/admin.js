@@ -17,6 +17,78 @@ const router = express.Router();
 const upload = multer();
 router.use(authMiddleware, requireRole("admin"));
 
+/**
+ * Get the effective salary for a labour on a specific date.
+ * Looks up salary_history for the most recent entry where effective_date <= targetDate.
+ * Falls back to users.daily_wage if no salary_history exists (backward compatibility).
+ */
+async function getSalaryOnDate(labourId, targetDate) {
+  const { data: historyEntry } = await supabase
+    .from("salary_history")
+    .select("salary")
+    .eq("labour_id", labourId)
+    .lte("effective_date", targetDate)
+    .order("effective_date", { ascending: false })
+    .limit(1)
+    .single();
+  if (historyEntry) return Number(historyEntry.salary);
+  // Fallback: use current daily_wage from users table
+  const { data: user } = await supabase.from("users").select("daily_wage").eq("id", labourId).single();
+  return user ? Number(user.daily_wage) : 0;
+}
+
+/**
+ * Get salary map for a labour for each unique date in a list.
+ * Optimized: fetches all salary_history entries once, then computes per date.
+ */
+async function getSalaryMapForDates(labourId, dates) {
+  if (!dates || dates.length === 0) return {};
+  const { data: history } = await supabase
+    .from("salary_history")
+    .select("salary, effective_date")
+    .eq("labour_id", labourId)
+    .order("effective_date", { ascending: true });
+  if (!history || history.length === 0) {
+    // Fallback to current wage
+    const { data: user } = await supabase.from("users").select("daily_wage").eq("id", labourId).single();
+    const wage = user ? Number(user.daily_wage) : 0;
+    const map = {};
+    dates.forEach(d => { map[d] = wage; });
+    return map;
+  }
+  const map = {};
+  dates.forEach(d => {
+    let salary = Number(history[0].salary); // default to earliest known salary
+    for (const entry of history) {
+      if (entry.effective_date <= d) salary = Number(entry.salary);
+      else break;
+    }
+    map[d] = salary;
+  });
+  return map;
+}
+
+/**
+ * Batch: get salary on a specific date for multiple labours.
+ * Returns { labourId: salary } map.
+ */
+async function getBulkSalaryOnDate(labourIds, targetDate) {
+  if (!labourIds || labourIds.length === 0) return {};
+  const { data: history } = await supabase
+    .from("salary_history")
+    .select("labour_id, salary, effective_date")
+    .in("labour_id", labourIds)
+    .lte("effective_date", targetDate)
+    .order("effective_date", { ascending: false });
+
+  const result = {};
+  // Group by labour and take the first (most recent) entry for each
+  (history || []).forEach(h => {
+    if (!result[h.labour_id]) result[h.labour_id] = Number(h.salary);
+  });
+  return result;
+}
+
 function toDateStr(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
@@ -36,8 +108,9 @@ async function getConfig() {
 async function recalcPay(labour_id, start_time, end_time, date) {
   const config = await getConfig();
   const { data: holidays } = await supabase.from("holidays").select("date");
-  const { data: labour } = await supabase.from("users").select("daily_wage, designation").eq("id", labour_id).single();
-  return calculatePayment(labour.daily_wage, start_time, end_time, date, holidays || [], config, labour.designation);
+  const { data: labour } = await supabase.from("users").select("designation").eq("id", labour_id).single();
+  const salary = await getSalaryOnDate(labour_id, date);
+  return calculatePayment(salary, start_time, end_time, date, holidays || [], config, labour?.designation);
 }
 
 // ===== Attendance =====
@@ -81,15 +154,21 @@ function getSundaysAndHolidaysInMonth(monthStr, holidayDates) {
 
 /**
  * Calculate Sunday/Holiday auto-pay (rest day pay) for UNATTENDED Sundays/holidays.
- * When a worker works on Sunday, they get Sunday OT rate (1.5×) which covers everything.
- * When they don't work, they get rest day pay only.
+ * Now uses date-aware salary lookup per Sunday date.
  */
-function calcSundayAutoPayForMonth(monthStr, dailyWage, attendanceDates, holidayDates, config) {
+async function calcSundayAutoPayForMonth(monthStr, labourId, dailyWageFallback, attendanceDates, holidayDates, config) {
   const allSH = getSundaysAndHolidaysInMonth(monthStr, holidayDates);
   const attendedSet = new Set(attendanceDates);
+  const unattendedDates = allSH.filter(d => !attendedSet.has(d));
+  if (unattendedDates.length === 0) return { autoPay: 0, autoPayDays: 0 };
+
+  // Get salary for each unattended Sunday/Holiday
+  const salaryMap = await getSalaryMapForDates(labourId, unattendedDates);
   let autoPay = 0, autoPayDays = 0;
-  for (const dateStr of allSH) {
-    if (!attendedSet.has(dateStr)) { autoPay += calculateSundayAutoPay(dailyWage, dateStr, config); autoPayDays++; }
+  for (const dateStr of unattendedDates) {
+    const wage = salaryMap[dateStr] || dailyWageFallback;
+    autoPay += calculateSundayAutoPay(wage, dateStr, config);
+    autoPayDays++;
   }
   return { autoPay: Math.round(autoPay * 100) / 100, autoPayDays };
 }
@@ -270,10 +349,10 @@ router.get("/reports/monthly", async (req, res) => {
     const attByLabour = {};
     rows.forEach(r => { if (!attByLabour[r.labour_id]) attByLabour[r.labour_id] = []; attByLabour[r.labour_id].push(r.date); });
     const sundayAutoPayMap = {};
-    (labours || []).forEach(l => {
-      const { autoPay } = calcSundayAutoPayForMonth(month, l.daily_wage, attByLabour[l.id] || [], holidayDates, config);
+    for (const l of (labours || [])) {
+      const { autoPay } = await calcSundayAutoPayForMonth(month, l.id, l.daily_wage, attByLabour[l.id] || [], holidayDates, config);
       if (autoPay > 0) { sundayAutoPayMap[l.id] = autoPay; sundayAutoPayMap[l.id + "_name"] = l.name; sundayAutoPayMap[l.id + "_designation"] = l.designation || ""; }
-    });
+    }
     if (format === "xlsx") {
       const buf = generateMonthlyExcelReport(month, rows, sundayAutoPayMap);
       res.setHeader("Content-Disposition", `attachment; filename="Monthly_Summary_${month}.xlsx"`);
@@ -294,7 +373,7 @@ router.get("/reports/labour/:id", async (req, res) => {
     const rows = await enrichRows(data || []);
     const { data: holidays } = await supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
     const holidayDates = (holidays || []).map(h => h.date);
-    const { autoPay } = calcSundayAutoPayForMonth(month, labour?.daily_wage || 0, rows.map(r => r.date), holidayDates, config);
+    const { autoPay } = await calcSundayAutoPayForMonth(month, id, labour?.daily_wage || 0, rows.map(r => r.date), holidayDates, config);
     if (format === "xlsx") {
       const buf = generateLabourExcelReport(labour, month, rows, autoPay);
       const fn = `${safeName(labour?.name)}_Report_${month}.xlsx`;
@@ -354,11 +433,12 @@ router.get("/reports/payroll", async (req, res) => {
     const holidayDates = (holidays || []).map(h => h.date);
     const attByLabour = {};
     (attendance || []).forEach(a => { if (!attByLabour[a.labour_id]) attByLabour[a.labour_id] = []; attByLabour[a.labour_id].push(a); });
-    const rows = (labours || []).map(l => {
+    const rows = [];
+    for (const l of (labours || [])) {
       const recs = attByLabour[l.id] || [];
       const attendanceDates = recs.map(r => r.date);
-      const { autoPay } = calcSundayAutoPayForMonth(month, l.daily_wage, attendanceDates, holidayDates, config);
-      return {
+      const { autoPay } = await calcSundayAutoPayForMonth(month, l.id, l.daily_wage, attendanceDates, holidayDates, config);
+      rows.push({
         labour_id: l.id, labour_name: l.name, designation: l.designation || "", daily_wage: l.daily_wage,
         days_worked: recs.length,
         total_hours: recs.reduce((s, r) => s + (r.hours_worked || 0), 0),
@@ -368,8 +448,8 @@ router.get("/reports/payroll", async (req, res) => {
         sunday_days: recs.filter(r => r.is_sunday).length,
         holiday_days: recs.filter(r => r.is_holiday).length,
         sunday_auto_pay: autoPay,
-      };
-    });
+      });
+    }
     if (format === "xlsx") {
       const buf = generatePayrollExcelReport(month, rows);
       res.setHeader("Content-Disposition", `attachment; filename="Payroll_Summary_${month}.xlsx"`);
@@ -405,6 +485,18 @@ router.post("/labours", async (req, res) => {
       passport_id: passport_id || null, date_of_joining: date_of_joining || null, status: "active",
     }).select().single();
     if (error) throw error;
+
+    // Create initial salary_history entry
+    if (daily_wage > 0) {
+      await supabase.from("salary_history").insert({
+        labour_id: data.id,
+        salary: daily_wage,
+        effective_date: date_of_joining || new Date().toISOString().slice(0, 10),
+        notes: "Initial salary",
+        created_by: req.user.id,
+      });
+    }
+
     return res.status(201).json({ ...data, pin: rawPin });
   } catch (err) { console.error(err); return res.status(500).json({ message: "Internal server error" }); }
 });
@@ -717,6 +809,73 @@ router.delete("/managers/:id", async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ message: "Internal server error" }); }
 });
 
+// ===== Salary History =====
+
+// Get salary history for a labour
+router.get("/salary-history/:labourId", async (req, res) => {
+  try {
+    const { data } = await supabase
+      .from("salary_history")
+      .select("*")
+      .eq("labour_id", req.params.labourId)
+      .order("effective_date", { ascending: false });
+    return res.json(data || []);
+  } catch (err) { console.error(err); return res.status(500).json({ message: "Internal server error" }); }
+});
+
+// Add salary change with effective date
+router.post("/salary-history", async (req, res) => {
+  try {
+    const { labour_id, salary, effective_date, notes } = req.body;
+    if (!labour_id || !salary || !effective_date) return res.status(400).json({ message: "labour_id, salary, and effective_date required" });
+    if (Number(salary) <= 0) return res.status(400).json({ message: "Salary must be positive" });
+
+    // Insert into salary_history
+    const { data, error } = await supabase.from("salary_history").insert({
+      labour_id, salary: Number(salary), effective_date, notes: notes || null, created_by: req.user.id,
+    }).select().single();
+    if (error) throw error;
+
+    // Update users.daily_wage to the latest salary (most recent effective_date)
+    const { data: latest } = await supabase
+      .from("salary_history")
+      .select("salary")
+      .eq("labour_id", labour_id)
+      .order("effective_date", { ascending: false })
+      .limit(1)
+      .single();
+    if (latest) {
+      await supabase.from("users").update({ daily_wage: latest.salary }).eq("id", labour_id);
+    }
+
+    return res.status(201).json(data);
+  } catch (err) { console.error(err); return res.status(500).json({ message: "Internal server error" }); }
+});
+
+// Delete salary history entry
+router.delete("/salary-history/:id", async (req, res) => {
+  try {
+    const { data: entry } = await supabase.from("salary_history").select("labour_id").eq("id", req.params.id).single();
+    await supabase.from("salary_history").delete().eq("id", req.params.id);
+
+    // Update users.daily_wage to reflect the latest remaining entry
+    if (entry) {
+      const { data: latest } = await supabase
+        .from("salary_history")
+        .select("salary")
+        .eq("labour_id", entry.labour_id)
+        .order("effective_date", { ascending: false })
+        .limit(1)
+        .single();
+      if (latest) {
+        await supabase.from("users").update({ daily_wage: latest.salary }).eq("id", entry.labour_id);
+      }
+    }
+
+    return res.json({ message: "Deleted" });
+  } catch (err) { console.error(err); return res.status(500).json({ message: "Internal server error" }); }
+});
+
 // ===== Advance Payments =====
 
 // Summary must be before :labourId to avoid "summary" being treated as an ID
@@ -796,10 +955,10 @@ router.get("/analytics", async (req, res) => {
     const attByLabour = {};
     monthRows.forEach(r => { if (!attByLabour[r.labour_id]) attByLabour[r.labour_id] = []; attByLabour[r.labour_id].push(r.date); });
     let totalSundayAutoPay = 0;
-    (labours || []).forEach(l => {
-      const { autoPay } = calcSundayAutoPayForMonth(monthStr, l.daily_wage, attByLabour[l.id] || [], holidayDates, config);
+    for (const l of (labours || [])) {
+      const { autoPay } = await calcSundayAutoPayForMonth(monthStr, l.id, l.daily_wage, attByLabour[l.id] || [], holidayDates, config);
       totalSundayAutoPay += autoPay;
-    });
+    }
     totalWagesMonth += totalSundayAutoPay;
     totalRegularMonth += totalSundayAutoPay;
 
@@ -829,11 +988,11 @@ router.get("/analytics", async (req, res) => {
     const labourStats = {};
     monthRows.forEach(r => { const lid = r.labour_id; if (!labourStats[lid]) labourStats[lid] = { labour_id: lid, name: labourMap[lid] || "Unknown", wages: 0, days: 0, hours: 0 }; labourStats[lid].wages += r.total_pay || 0; labourStats[lid].days++; labourStats[lid].hours += r.hours_worked || 0; });
     // Add Sunday auto-pay to each labour's top earner total
-    (labours || []).forEach(l => {
-      const { autoPay } = calcSundayAutoPayForMonth(monthStr, l.daily_wage, attByLabour[l.id] || [], holidayDates, config);
+    for (const l of (labours || [])) {
+      const { autoPay } = await calcSundayAutoPayForMonth(monthStr, l.id, l.daily_wage, attByLabour[l.id] || [], holidayDates, config);
       if (labourStats[l.id]) labourStats[l.id].wages += autoPay;
       else if (autoPay > 0) labourStats[l.id] = { labour_id: l.id, name: labourMap[l.id] || "Unknown", wages: autoPay, days: 0, hours: 0 };
-    });
+    }
     const topLabours = Object.values(labourStats).sort((a, b) => b.wages - a.wages).slice(0, 10);
 
     const avgDailyWage = monthRows.length > 0 ? totalWagesMonth / monthRows.length : 0;
@@ -864,9 +1023,10 @@ router.get("/reports/payroll-with-incentives", async (req, res) => {
       attByLabour[a.labour_id].push(a);
     });
 
-    const rows = (labours || []).map(l => {
+    const rows = [];
+    for (const l of (labours || [])) {
       const recs = attByLabour[l.id] || [];
-      const { autoPay } = calcSundayAutoPayForMonth(month, l.daily_wage, recs.map(r => r.date), holidayDates, config);
+      const { autoPay } = await calcSundayAutoPayForMonth(month, l.id, l.daily_wage, recs.map(r => r.date), holidayDates, config);
       const base = {
         labour_id: l.id, labour_name: l.name, designation: l.designation || "", daily_wage: l.daily_wage,
         days_worked: recs.length,
@@ -909,8 +1069,8 @@ router.get("/reports/payroll-with-incentives", async (req, res) => {
         }
       });
 
-      return { ...base, incentive: totalIncentive, incentive_details: incentiveDetails, grand_total: base.total_pay + totalIncentive };
-    });
+      rows.push({ ...base, incentive: totalIncentive, incentive_details: incentiveDetails, grand_total: base.total_pay + totalIncentive });
+    }
 
     if (format === "xlsx") {
       const XLSX = require("xlsx");
