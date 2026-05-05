@@ -848,31 +848,89 @@ router.post("/salary-history", async (req, res) => {
       await supabase.from("users").update({ daily_wage: latest.salary }).eq("id", labour_id);
     }
 
-    return res.status(201).json(data);
+    // Recalculate all attendance records on or after the effective date
+    // This ensures backdated salary changes update existing pay calculations
+    let recalcCount = 0;
+    try {
+      const { data: affected } = await supabase
+        .from("attendance")
+        .select("id, labour_id, start_time, end_time, date")
+        .eq("labour_id", labour_id)
+        .gte("date", effective_date)
+        .order("date");
+
+      if (affected && affected.length > 0) {
+        for (const att of affected) {
+          const result = await recalcPay(att.labour_id, att.start_time, att.end_time, att.date);
+          await supabase.from("attendance").update({
+            hours_worked: result.hoursWorked,
+            regular_pay: result.regularPay,
+            ot_pay: result.otPay,
+            total_pay: result.totalPay,
+            is_sunday: result.isSunday,
+            is_holiday: result.isHoliday,
+          }).eq("id", att.id);
+          recalcCount++;
+        }
+      }
+    } catch (recalcErr) {
+      // Log but don't fail the request — salary entry was saved successfully
+      console.error("Recalc error (non-fatal):", recalcErr);
+    }
+
+    return res.status(201).json({ ...data, recalculated: recalcCount });
   } catch (err) { console.error(err); return res.status(500).json({ message: "Internal server error" }); }
 });
 
 // Delete salary history entry
 router.delete("/salary-history/:id", async (req, res) => {
   try {
-    const { data: entry } = await supabase.from("salary_history").select("labour_id").eq("id", req.params.id).single();
+    const { data: entry } = await supabase.from("salary_history").select("labour_id, effective_date").eq("id", req.params.id).single();
+    if (!entry) return res.status(404).json({ message: "Not found" });
+
     await supabase.from("salary_history").delete().eq("id", req.params.id);
 
     // Update users.daily_wage to reflect the latest remaining entry
-    if (entry) {
-      const { data: latest } = await supabase
-        .from("salary_history")
-        .select("salary")
-        .eq("labour_id", entry.labour_id)
-        .order("effective_date", { ascending: false })
-        .limit(1)
-        .single();
-      if (latest) {
-        await supabase.from("users").update({ daily_wage: latest.salary }).eq("id", entry.labour_id);
-      }
+    const { data: latest } = await supabase
+      .from("salary_history")
+      .select("salary")
+      .eq("labour_id", entry.labour_id)
+      .order("effective_date", { ascending: false })
+      .limit(1)
+      .single();
+    if (latest) {
+      await supabase.from("users").update({ daily_wage: latest.salary }).eq("id", entry.labour_id);
     }
 
-    return res.json({ message: "Deleted" });
+    // Recalculate attendance records from the deleted entry's effective date onward
+    let recalcCount = 0;
+    try {
+      const { data: affected } = await supabase
+        .from("attendance")
+        .select("id, labour_id, start_time, end_time, date")
+        .eq("labour_id", entry.labour_id)
+        .gte("date", entry.effective_date)
+        .order("date");
+
+      if (affected && affected.length > 0) {
+        for (const att of affected) {
+          const result = await recalcPay(att.labour_id, att.start_time, att.end_time, att.date);
+          await supabase.from("attendance").update({
+            hours_worked: result.hoursWorked,
+            regular_pay: result.regularPay,
+            ot_pay: result.otPay,
+            total_pay: result.totalPay,
+            is_sunday: result.isSunday,
+            is_holiday: result.isHoliday,
+          }).eq("id", att.id);
+          recalcCount++;
+        }
+      }
+    } catch (recalcErr) {
+      console.error("Recalc error on delete (non-fatal):", recalcErr);
+    }
+
+    return res.json({ message: "Deleted", recalculated: recalcCount });
   } catch (err) { console.error(err); return res.status(500).json({ message: "Internal server error" }); }
 });
 
