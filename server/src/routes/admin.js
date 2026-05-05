@@ -173,6 +173,35 @@ async function calcSundayAutoPayForMonth(monthStr, labourId, dailyWageFallback, 
   return { autoPay: Math.round(autoPay * 100) / 100, autoPayDays };
 }
 
+/**
+ * BATCH version: calculate Sunday auto-pay using pre-fetched salary history.
+ * No DB calls — all data passed in. Used by analytics for performance.
+ */
+function calcSundayAutoPayBatch(monthStr, labourId, dailyWageFallback, attendanceDates, holidayDates, config, allSalaryHistory) {
+  const allSH = getSundaysAndHolidaysInMonth(monthStr, holidayDates);
+  const attendedSet = new Set(attendanceDates);
+  const unattendedDates = allSH.filter(d => !attendedSet.has(d));
+  if (unattendedDates.length === 0) return { autoPay: 0, autoPayDays: 0 };
+
+  // Use pre-fetched salary history for this labour
+  const labourHistory = (allSalaryHistory || []).filter(h => h.labour_id === labourId).sort((a, b) => a.effective_date.localeCompare(b.effective_date));
+
+  let autoPay = 0, autoPayDays = 0;
+  for (const dateStr of unattendedDates) {
+    let wage = dailyWageFallback;
+    if (labourHistory.length > 0) {
+      wage = Number(labourHistory[0].salary);
+      for (const entry of labourHistory) {
+        if (entry.effective_date <= dateStr) wage = Number(entry.salary);
+        else break;
+      }
+    }
+    autoPay += calculateSundayAutoPay(wage, dateStr, config);
+    autoPayDays++;
+  }
+  return { autoPay: Math.round(autoPay * 100) / 100, autoPayDays };
+}
+
 router.get("/attendance", async (req, res) => {
   try {
     const { date } = req.query;
@@ -1060,44 +1089,76 @@ router.get("/analytics", async (req, res) => {
     const today = uaeToday();
     const monthStr = `${uae.year}-${String(uae.month).padStart(2, "0")}`;
     const monthStart = `${monthStr}-01`;
+    const twoWeeksAgo = new Date(); twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
 
-    const { data: labours } = await supabase.from("users").select("id, name, daily_wage, designation").eq("role", "labour").eq("status", "active");
+    // Run ALL independent queries in parallel (was sequential before)
+    const [
+      { data: labours },
+      { data: advData },
+      { data: todayAtt },
+      { data: monthAtt },
+      { data: holidaysData },
+      { data: trendData },
+      { data: clients },
+      { data: sitesList },
+      { data: allSalaryHistory },
+    ] = await Promise.all([
+      supabase.from("users").select("id, name, daily_wage, designation").eq("role", "labour").eq("status", "active"),
+      supabase.from("advance_payments").select("labour_id, amount"),
+      supabase.from("attendance").select("labour_id, total_pay, client_id").eq("date", today),
+      supabase.from("attendance").select("labour_id, total_pay, regular_pay, ot_pay, hours_worked, client_id, site_id, date, is_sunday, is_holiday").gte("date", monthStart),
+      supabase.from("holidays").select("date").gte("date", monthStart).lt("date", nextMonthStart(monthStr)),
+      supabase.from("attendance").select("date, total_pay").gte("date", toDateStr(twoWeeksAgo)),
+      supabase.from("clients").select("id, name"),
+      supabase.from("sites").select("id, name, client_id"),
+      supabase.from("salary_history").select("labour_id, salary, effective_date").order("effective_date", { ascending: true }),
+    ]);
+
     const totalLabours = (labours || []).length;
+    const presentToday = (todayAtt || []).length;
+    const holidayDates = (holidaysData || []).map(h => h.date);
+    const monthRows = monthAtt || [];
 
-    // Get advance payment totals from advance_payments table
-    const { data: advData } = await supabase.from("advance_payments").select("labour_id, amount");
+    // Advance totals
     const totalAdvancePayment = (advData || []).reduce((s, r) => s + (r.amount || 0), 0);
     const advByLabour = {};
     (advData || []).forEach(r => { advByLabour[r.labour_id] = (advByLabour[r.labour_id] || 0) + (r.amount || 0); });
     const laboursWithAdvance = Object.keys(advByLabour).length;
 
-    const { data: todayAtt } = await supabase.from("attendance").select("labour_id, total_pay, client_id").eq("date", today);
-    const presentToday = (todayAtt || []).length;
-
-    const { data: monthAtt } = await supabase.from("attendance").select("labour_id, total_pay, regular_pay, ot_pay, hours_worked, client_id, site_id, date, is_sunday, is_holiday").gte("date", monthStart);
-    const { data: holidaysData } = await supabase.from("holidays").select("date").gte("date", monthStart).lt("date", nextMonthStart(monthStr));
-    const holidayDates = (holidaysData || []).map(h => h.date);
-
-    const monthRows = monthAtt || [];
+    // Month totals
     let totalWagesMonth = monthRows.reduce((s, r) => s + (r.total_pay || 0), 0);
     let totalRegularMonth = monthRows.reduce((s, r) => s + (r.regular_pay || 0), 0);
     const totalOTMonth = monthRows.reduce((s, r) => s + (r.ot_pay || 0), 0);
     const totalHoursMonth = monthRows.reduce((s, r) => s + (r.hours_worked || 0), 0);
     const uniqueWorkDays = new Set(monthRows.map(r => r.date)).size;
 
-    // Add Sunday auto-pay per labour
+    // Attendance by labour
     const attByLabour = {};
     monthRows.forEach(r => { if (!attByLabour[r.labour_id]) attByLabour[r.labour_id] = []; attByLabour[r.labour_id].push(r.date); });
+
+    // Labour stats + Sunday auto-pay — SINGLE LOOP (was two loops before)
+    const labourMap = {}; (labours || []).forEach(l => { labourMap[l.id] = l.name; });
+    const labourStats = {};
+    monthRows.forEach(r => {
+      const lid = r.labour_id;
+      if (!labourStats[lid]) labourStats[lid] = { labour_id: lid, name: labourMap[lid] || "Unknown", wages: 0, days: 0, hours: 0 };
+      labourStats[lid].wages += r.total_pay || 0;
+      labourStats[lid].days++;
+      labourStats[lid].hours += r.hours_worked || 0;
+    });
+
     let totalSundayAutoPay = 0;
     for (const l of (labours || [])) {
-      const { autoPay } = await calcSundayAutoPayForMonth(monthStr, l.id, l.daily_wage, attByLabour[l.id] || [], holidayDates, config);
+      // Uses batch version — no DB calls, uses pre-fetched allSalaryHistory
+      const { autoPay } = calcSundayAutoPayBatch(monthStr, l.id, l.daily_wage, attByLabour[l.id] || [], holidayDates, config, allSalaryHistory);
       totalSundayAutoPay += autoPay;
+      if (labourStats[l.id]) labourStats[l.id].wages += autoPay;
+      else if (autoPay > 0) labourStats[l.id] = { labour_id: l.id, name: labourMap[l.id] || "Unknown", wages: autoPay, days: 0, hours: 0 };
     }
     totalWagesMonth += totalSundayAutoPay;
     totalRegularMonth += totalSundayAutoPay;
 
-    const twoWeeksAgo = new Date(); twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
-    const { data: trendData } = await supabase.from("attendance").select("date, total_pay").gte("date", toDateStr(twoWeeksAgo));
+    // Daily trend (last 14 days)
     const dailyTrend = {};
     (trendData || []).forEach(r => {
       if (!dailyTrend[r.date]) dailyTrend[r.date] = { date: r.date, count: 0, wages: 0 };
@@ -1106,29 +1167,19 @@ router.get("/analytics", async (req, res) => {
     });
     const trendArray = Object.values(dailyTrend).sort((a, b) => a.date.localeCompare(b.date));
 
-    const { data: clients } = await supabase.from("clients").select("id, name");
+    // Client breakdown
     const clientMap = {}; (clients || []).forEach(c => { clientMap[c.id] = c.name; });
     const clientStats = {};
     monthRows.forEach(r => { const cid = r.client_id; if (!clientStats[cid]) clientStats[cid] = { client_id: cid, client_name: clientMap[cid] || "Unknown", workers: new Set(), wages: 0, days: 0 }; clientStats[cid].workers.add(r.labour_id); clientStats[cid].wages += r.total_pay || 0; clientStats[cid].days++; });
     const clientBreakdown = Object.values(clientStats).map(c => ({ ...c, workers: c.workers.size })).sort((a, b) => b.wages - a.wages);
 
-    const { data: sitesList } = await supabase.from("sites").select("id, name, client_id");
+    // Site breakdown
     const siteMap = {}; (sitesList || []).forEach(s => { siteMap[s.id] = { name: s.name, client: clientMap[s.client_id] || "" }; });
     const siteStats = {};
     monthRows.forEach(r => { const sid = r.site_id; if (!siteStats[sid]) siteStats[sid] = { site_id: sid, site_name: siteMap[sid]?.name || "Unknown", client_name: siteMap[sid]?.client || "", wages: 0, days: 0 }; siteStats[sid].wages += r.total_pay || 0; siteStats[sid].days++; });
     const siteBreakdown = Object.values(siteStats).sort((a, b) => b.wages - a.wages).slice(0, 10);
 
-    const labourMap = {}; (labours || []).forEach(l => { labourMap[l.id] = l.name; });
-    const labourStats = {};
-    monthRows.forEach(r => { const lid = r.labour_id; if (!labourStats[lid]) labourStats[lid] = { labour_id: lid, name: labourMap[lid] || "Unknown", wages: 0, days: 0, hours: 0 }; labourStats[lid].wages += r.total_pay || 0; labourStats[lid].days++; labourStats[lid].hours += r.hours_worked || 0; });
-    // Add Sunday auto-pay to each labour's top earner total
-    for (const l of (labours || [])) {
-      const { autoPay } = await calcSundayAutoPayForMonth(monthStr, l.id, l.daily_wage, attByLabour[l.id] || [], holidayDates, config);
-      if (labourStats[l.id]) labourStats[l.id].wages += autoPay;
-      else if (autoPay > 0) labourStats[l.id] = { labour_id: l.id, name: labourMap[l.id] || "Unknown", wages: autoPay, days: 0, hours: 0 };
-    }
     const topLabours = Object.values(labourStats).sort((a, b) => b.wages - a.wages).slice(0, 10);
-
     const avgDailyWage = monthRows.length > 0 ? totalWagesMonth / monthRows.length : 0;
 
     res.json({
