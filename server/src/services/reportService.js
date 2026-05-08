@@ -51,13 +51,19 @@ function generateFilteredDailyExcelReport(date, rows, filterLabel) {
 }
 
 // ===== Monthly Report =====
-function generateMonthlyExcelReport(month, rows, sundayAutoPayMap, adjustmentsMap) {
+function generateMonthlyExcelReport(month, rows, sundayAutoPayMap, adjustmentsMap, laboursList) {
   const map = {};
   rows.forEach(r => { if (!map[r.labour_id]) map[r.labour_id] = { name: r.labour_name, designation: r.designation || "", recs: [] }; map[r.labour_id].recs.push(r); });
   const dim = new Date(parseInt(month.split("-")[0]), parseInt(month.split("-")[1]), 0).getDate();
   const data = [["MONTHLY ATTENDANCE REPORT"], [`Month: ${month}`], [], ["Labour ID", "Name", "Designation", "Days", "Hours", "Regular (AED)", "OT (AED)", "Sunday Rest Pay", "Base Pay", "Incentives", "Deductions", "Net Pay", "Attendance %"]];
   let grand = 0, grandInc = 0, grandDed = 0;
+
+  // Track which labours have been added
+  const addedLabourIds = new Set();
+
+  // First: labours with attendance records
   Object.entries(map).forEach(([id, info]) => {
+    addedLabourIds.add(String(id));
     const d = info.recs.length, h = info.recs.reduce((s, r) => s + (r.hours_worked || 0), 0);
     const reg = info.recs.reduce((s, r) => s + (r.regular_pay || 0), 0), ot = info.recs.reduce((s, r) => s + (r.ot_pay || 0), 0), tp = info.recs.reduce((s, r) => s + (r.total_pay || 0), 0);
     const autoP = (sundayAutoPayMap && sundayAutoPayMap[id]) || 0;
@@ -67,10 +73,12 @@ function generateMonthlyExcelReport(month, rows, sundayAutoPayMap, adjustmentsMa
     grand += basePay; grandInc += adj.incentives; grandDed += adj.deductions;
     data.push([Number(id), info.name, info.designation, d, Math.round(h * 100) / 100, Math.round(reg * 100) / 100, Math.round(ot * 100) / 100, Math.round(autoP * 100) / 100, Math.round(basePay * 100) / 100, Math.round(adj.incentives * 100) / 100, Math.round(adj.deductions * 100) / 100, Math.round(netPay * 100) / 100, ((d / dim) * 100).toFixed(1) + "%"]);
   });
-  // Add labours with zero attendance but have Sunday auto-pay
+
+  // Second: labours with Sunday auto-pay but no attendance
   if (sundayAutoPayMap) {
     Object.entries(sundayAutoPayMap).forEach(([id, autoP]) => {
-      if (!map[id] && autoP > 0 && !id.endsWith("_name") && !id.endsWith("_designation")) {
+      if (!addedLabourIds.has(String(id)) && autoP > 0 && !id.endsWith("_name") && !id.endsWith("_designation")) {
+        addedLabourIds.add(String(id));
         const adj = (adjustmentsMap && adjustmentsMap[id]) || { incentives: 0, deductions: 0 };
         const netPay = autoP + adj.incentives - adj.deductions;
         grand += autoP; grandInc += adj.incentives; grandDed += adj.deductions;
@@ -80,6 +88,20 @@ function generateMonthlyExcelReport(month, rows, sundayAutoPayMap, adjustmentsMa
       }
     });
   }
+
+  // Third: ALL remaining labours (zero attendance, zero auto-pay) — ensures all 63 appear
+  if (laboursList) {
+    laboursList.forEach(l => {
+      if (!addedLabourIds.has(String(l.id))) {
+        addedLabourIds.add(String(l.id));
+        const adj = (adjustmentsMap && adjustmentsMap[l.id]) || { incentives: 0, deductions: 0 };
+        const netPay = adj.incentives - adj.deductions;
+        grandInc += adj.incentives; grandDed += adj.deductions;
+        data.push([l.id, l.name, l.designation || "", 0, 0, 0, 0, 0, 0, Math.round(adj.incentives * 100) / 100, Math.round(adj.deductions * 100) / 100, Math.round(netPay * 100) / 100, "0.0%"]);
+      }
+    });
+  }
+
   data.push([], ["", "", "", "", "", "", "", "", "TOTAL", Math.round(grandInc * 100) / 100, Math.round(grandDed * 100) / 100, Math.round((grand + grandInc - grandDed) * 100) / 100, ""]);
   const ws = XLSX.utils.aoa_to_sheet(data);
   ws["!cols"] = [{ wch: 10 }, { wch: 20 }, { wch: 16 }, { wch: 8 }, { wch: 10 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];

@@ -154,15 +154,19 @@ function getSundaysAndHolidaysInMonth(monthStr, holidayDates) {
 
 /**
  * Calculate Sunday/Holiday auto-pay (rest day pay) for UNATTENDED Sundays/holidays.
- * Now uses date-aware salary lookup per Sunday date.
+ * Uses date-aware salary lookup per Sunday date.
+ * joiningDate: if provided, skips any Sundays before this date (labour hadn't joined yet).
  */
-async function calcSundayAutoPayForMonth(monthStr, labourId, dailyWageFallback, attendanceDates, holidayDates, config) {
+async function calcSundayAutoPayForMonth(monthStr, labourId, dailyWageFallback, attendanceDates, holidayDates, config, joiningDate) {
   const allSH = getSundaysAndHolidaysInMonth(monthStr, holidayDates);
   const attendedSet = new Set(attendanceDates);
-  const unattendedDates = allSH.filter(d => !attendedSet.has(d));
+  const unattendedDates = allSH.filter(d => {
+    if (attendedSet.has(d)) return false;
+    if (joiningDate && d < joiningDate) return false; // Skip Sundays before joining
+    return true;
+  });
   if (unattendedDates.length === 0) return { autoPay: 0, autoPayDays: 0 };
 
-  // Get salary for each unattended Sunday/Holiday
   const salaryMap = await getSalaryMapForDates(labourId, unattendedDates);
   let autoPay = 0, autoPayDays = 0;
   for (const dateStr of unattendedDates) {
@@ -176,14 +180,18 @@ async function calcSundayAutoPayForMonth(monthStr, labourId, dailyWageFallback, 
 /**
  * BATCH version: calculate Sunday auto-pay using pre-fetched salary history.
  * No DB calls — all data passed in. Used by analytics for performance.
+ * joiningDate: if provided, skips Sundays before this date.
  */
-function calcSundayAutoPayBatch(monthStr, labourId, dailyWageFallback, attendanceDates, holidayDates, config, allSalaryHistory) {
+function calcSundayAutoPayBatch(monthStr, labourId, dailyWageFallback, attendanceDates, holidayDates, config, allSalaryHistory, joiningDate) {
   const allSH = getSundaysAndHolidaysInMonth(monthStr, holidayDates);
   const attendedSet = new Set(attendanceDates);
-  const unattendedDates = allSH.filter(d => !attendedSet.has(d));
+  const unattendedDates = allSH.filter(d => {
+    if (attendedSet.has(d)) return false;
+    if (joiningDate && d < joiningDate) return false;
+    return true;
+  });
   if (unattendedDates.length === 0) return { autoPay: 0, autoPayDays: 0 };
 
-  // Use pre-fetched salary history for this labour
   const labourHistory = (allSalaryHistory || []).filter(h => h.labour_id === labourId).sort((a, b) => a.effective_date.localeCompare(b.effective_date));
 
   let autoPay = 0, autoPayDays = 0;
@@ -372,14 +380,14 @@ router.get("/reports/monthly", async (req, res) => {
     const config = await getConfig();
     const { data } = await supabase.from("attendance").select("*").gte("date", `${month}-01`).lt("date", nextMonthStart(month)).order("labour_id");
     const rows = await enrichRows(data || []);
-    const { data: labours } = await supabase.from("users").select("id, name, daily_wage, designation").eq("role", "labour").eq("status", "active");
+    const { data: labours } = await supabase.from("users").select("id, name, daily_wage, designation, date_of_joining").eq("role", "labour").eq("status", "active");
     const { data: holidays } = await supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
     const holidayDates = (holidays || []).map(h => h.date);
     const attByLabour = {};
     rows.forEach(r => { if (!attByLabour[r.labour_id]) attByLabour[r.labour_id] = []; attByLabour[r.labour_id].push(r.date); });
     const sundayAutoPayMap = {};
     for (const l of (labours || [])) {
-      const { autoPay } = await calcSundayAutoPayForMonth(month, l.id, l.daily_wage, attByLabour[l.id] || [], holidayDates, config);
+      const { autoPay } = await calcSundayAutoPayForMonth(month, l.id, l.daily_wage, attByLabour[l.id] || [], holidayDates, config, l.date_of_joining);
       if (autoPay > 0) { sundayAutoPayMap[l.id] = autoPay; sundayAutoPayMap[l.id + "_name"] = l.name; sundayAutoPayMap[l.id + "_designation"] = l.designation || ""; }
     }
 
@@ -393,7 +401,7 @@ router.get("/reports/monthly", async (req, res) => {
     });
 
     if (format === "xlsx") {
-      const buf = generateMonthlyExcelReport(month, rows, sundayAutoPayMap, adjustmentsMap);
+      const buf = generateMonthlyExcelReport(month, rows, sundayAutoPayMap, adjustmentsMap, labours);
       res.setHeader("Content-Disposition", `attachment; filename="Monthly_Summary_${month}.xlsx"`);
       res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
       return res.send(Buffer.from(buf));
@@ -407,12 +415,12 @@ router.get("/reports/labour/:id", async (req, res) => {
     const { id } = req.params; const { month, format } = req.query;
     if (!month) return res.status(400).json({ message: "month required" });
     const config = await getConfig();
-    const { data: labour } = await supabase.from("users").select("id, name, daily_wage, designation").eq("id", id).single();
+    const { data: labour } = await supabase.from("users").select("id, name, daily_wage, designation, date_of_joining").eq("id", id).single();
     const { data } = await supabase.from("attendance").select("*").eq("labour_id", id).gte("date", `${month}-01`).lt("date", nextMonthStart(month)).order("date");
     const rows = await enrichRows(data || []);
     const { data: holidays } = await supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
     const holidayDates = (holidays || []).map(h => h.date);
-    const { autoPay } = await calcSundayAutoPayForMonth(month, id, labour?.daily_wage || 0, rows.map(r => r.date), holidayDates, config);
+    const { autoPay } = await calcSundayAutoPayForMonth(month, id, labour?.daily_wage || 0, rows.map(r => r.date), holidayDates, config, labour?.date_of_joining);
     if (format === "xlsx") {
       const buf = generateLabourExcelReport(labour, month, rows, autoPay);
       const fn = `${safeName(labour?.name)}_Report_${month}.xlsx`;
@@ -466,7 +474,7 @@ router.get("/reports/payroll", async (req, res) => {
   try {
     const { month, format } = req.query; if (!month) return res.status(400).json({ message: "month required" });
     const config = await getConfig();
-    const { data: labours } = await supabase.from("users").select("id, name, daily_wage, designation").eq("role", "labour").eq("status", "active").order("id");
+    const { data: labours } = await supabase.from("users").select("id, name, daily_wage, designation, date_of_joining").eq("role", "labour").eq("status", "active").order("id");
     const { data: attendance } = await supabase.from("attendance").select("*").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
     const { data: holidays } = await supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
     const { data: adjustments } = await supabase.from("daily_adjustments").select("labour_id, type, amount").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
@@ -483,7 +491,7 @@ router.get("/reports/payroll", async (req, res) => {
     for (const l of (labours || [])) {
       const recs = attByLabour[l.id] || [];
       const attendanceDates = recs.map(r => r.date);
-      const { autoPay } = await calcSundayAutoPayForMonth(month, l.id, l.daily_wage, attendanceDates, holidayDates, config);
+      const { autoPay } = await calcSundayAutoPayForMonth(month, l.id, l.daily_wage, attendanceDates, holidayDates, config, l.date_of_joining);
       const adj = adjByLabour[l.id] || { incentives: 0, deductions: 0 };
       const basePay = recs.reduce((s, r) => s + (r.total_pay || 0), 0) + autoPay;
       rows.push({
@@ -1103,7 +1111,7 @@ router.get("/analytics", async (req, res) => {
       { data: sitesList },
       { data: allSalaryHistory },
     ] = await Promise.all([
-      supabase.from("users").select("id, name, daily_wage, designation").eq("role", "labour").eq("status", "active"),
+      supabase.from("users").select("id, name, daily_wage, designation, date_of_joining").eq("role", "labour").eq("status", "active"),
       supabase.from("advance_payments").select("labour_id, amount"),
       supabase.from("attendance").select("labour_id, total_pay, client_id").eq("date", today),
       supabase.from("attendance").select("labour_id, total_pay, regular_pay, ot_pay, hours_worked, client_id, site_id, date, is_sunday, is_holiday").gte("date", monthStart),
@@ -1150,7 +1158,7 @@ router.get("/analytics", async (req, res) => {
     let totalSundayAutoPay = 0;
     for (const l of (labours || [])) {
       // Uses batch version — no DB calls, uses pre-fetched allSalaryHistory
-      const { autoPay } = calcSundayAutoPayBatch(monthStr, l.id, l.daily_wage, attByLabour[l.id] || [], holidayDates, config, allSalaryHistory);
+      const { autoPay } = calcSundayAutoPayBatch(monthStr, l.id, l.daily_wage, attByLabour[l.id] || [], holidayDates, config, allSalaryHistory, l.date_of_joining);
       totalSundayAutoPay += autoPay;
       if (labourStats[l.id]) labourStats[l.id].wages += autoPay;
       else if (autoPay > 0) labourStats[l.id] = { labour_id: l.id, name: labourMap[l.id] || "Unknown", wages: autoPay, days: 0, hours: 0 };
@@ -1196,7 +1204,7 @@ router.get("/reports/payroll-with-incentives", async (req, res) => {
     if (!month) return res.status(400).json({ message: "month required" });
 
     const config = await getConfig();
-    const { data: labours } = await supabase.from("users").select("id, name, daily_wage, designation").eq("role", "labour").eq("status", "active").order("id");
+    const { data: labours } = await supabase.from("users").select("id, name, daily_wage, designation, date_of_joining").eq("role", "labour").eq("status", "active").order("id");
     const { data: attendance } = await supabase.from("attendance").select("*").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
     const { data: rules } = await supabase.from("incentive_rules").select("*").eq("active", true);
     const { data: holidays } = await supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
@@ -1211,7 +1219,7 @@ router.get("/reports/payroll-with-incentives", async (req, res) => {
     const rows = [];
     for (const l of (labours || [])) {
       const recs = attByLabour[l.id] || [];
-      const { autoPay } = await calcSundayAutoPayForMonth(month, l.id, l.daily_wage, recs.map(r => r.date), holidayDates, config);
+      const { autoPay } = await calcSundayAutoPayForMonth(month, l.id, l.daily_wage, recs.map(r => r.date), holidayDates, config, l.date_of_joining);
       const base = {
         labour_id: l.id, labour_name: l.name, designation: l.designation || "", daily_wage: l.daily_wage,
         days_worked: recs.length,

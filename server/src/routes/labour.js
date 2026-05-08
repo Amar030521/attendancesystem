@@ -62,10 +62,14 @@ function getSundaysAndHolidaysInMonth(monthStr, holidayDates) {
   return dates;
 }
 
-async function calcSundayAutoPayForMonth(monthStr, labourId, dailyWageFallback, attendanceDates, holidayDates, config) {
+async function calcSundayAutoPayForMonth(monthStr, labourId, dailyWageFallback, attendanceDates, holidayDates, config, joiningDate) {
   const allSundaysHolidays = getSundaysAndHolidaysInMonth(monthStr, holidayDates);
   const attendedSet = new Set(attendanceDates);
-  const unattendedDates = allSundaysHolidays.filter(d => !attendedSet.has(d));
+  const unattendedDates = allSundaysHolidays.filter(d => {
+    if (attendedSet.has(d)) return false;
+    if (joiningDate && d < joiningDate) return false;
+    return true;
+  });
   if (unattendedDates.length === 0) return { autoPay: 0, autoPayDays: 0 };
   const salaryMap = await getSalaryMapForDates(labourId, unattendedDates);
   let autoPay = 0, autoPayDays = 0;
@@ -87,7 +91,7 @@ router.get("/dashboard", async (req, res) => {
     const monthStr = `${uae.year}-${String(uae.month).padStart(2, "0")}`;
     const monthStart = `${monthStr}-01`;
 
-    const { data: userInfo } = await supabase.from("users").select("designation, daily_wage, photo_url").eq("id", labourId).single();
+    const { data: userInfo } = await supabase.from("users").select("designation, daily_wage, photo_url, date_of_joining").eq("id", labourId).single();
 
     // Get advance payment total from advance_payments table
     const { data: advRows } = await supabase.from("advance_payments").select("amount, date, notes").eq("labour_id", labourId).order("date", { ascending: false });
@@ -119,7 +123,7 @@ router.get("/dashboard", async (req, res) => {
     const { data: holidays } = await supabase.from("holidays").select("date").gte("date", monthStart).lt("date", `${uae.year}-${String(uae.month + 1).padStart(2, "0")}-01`);
     const holidayDates = (holidays || []).map(h => h.date);
     const attendanceDates = mr.map(r => r.date);
-    const { autoPay, autoPayDays } = await calcSundayAutoPayForMonth(monthStr, labourId, userInfo?.daily_wage || 0, attendanceDates, holidayDates, config);
+    const { autoPay, autoPayDays } = await calcSundayAutoPayForMonth(monthStr, labourId, userInfo?.daily_wage || 0, attendanceDates, holidayDates, config, userInfo?.date_of_joining);
 
     const monthSummary = {
       daysWorked: mr.length,
