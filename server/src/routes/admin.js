@@ -352,7 +352,7 @@ router.get("/reports/daily", async (req, res) => {
     let query = supabase.from("attendance").select("*").eq("date", date);
     if (client_id) query = query.eq("client_id", client_id);
     if (site_ids) { const sl = site_ids.split(",").filter(Boolean); if (sl.length) query = query.in("site_id", sl); }
-    const { data } = await query.order("labour_id").limit(10000);
+    const { data } = await query.order("labour_id").range(0, 9999);
     const rows = await enrichRows(data || []);
     let fl = "";
     if (client_id) { const { data: c } = await supabase.from("clients").select("name").eq("id", client_id).single(); fl = c?.name || ""; }
@@ -378,21 +378,52 @@ router.get("/reports/monthly", async (req, res) => {
   try {
     const { month, format } = req.query; if (!month) return res.status(400).json({ message: "month required" });
     const config = await getConfig();
-    const { data } = await supabase.from("attendance").select("*").gte("date", `${month}-01`).lt("date", nextMonthStart(month)).order("labour_id").limit(10000);
-    const rows = await enrichRows(data || []);
-    const { data: labours } = await supabase.from("users").select("id, name, daily_wage, designation, date_of_joining").eq("role", "labour").eq("status", "active");
-    const { data: holidays } = await supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
+
+    // Run ALL independent queries in parallel
+    const [
+      { data: attData },
+      { data: labours },
+      { data: holidays },
+      { data: adjData },
+      { data: allSalaryHistory },
+      { data: users },
+      { data: clients },
+      { data: sites },
+    ] = await Promise.all([
+      supabase.from("attendance").select("*").gte("date", `${month}-01`).lt("date", nextMonthStart(month)).order("labour_id").range(0, 9999),
+      supabase.from("users").select("id, name, daily_wage, designation, date_of_joining").eq("role", "labour").eq("status", "active"),
+      supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month)),
+      supabase.from("daily_adjustments").select("labour_id, type, amount").gte("date", `${month}-01`).lt("date", nextMonthStart(month)),
+      supabase.from("salary_history").select("labour_id, salary, effective_date").order("effective_date", { ascending: true }),
+      supabase.from("users").select("id, name, designation, photo_url"),
+      supabase.from("clients").select("id, name"),
+      supabase.from("sites").select("id, name, client_id"),
+    ]);
+
+    // Enrich rows in-memory (no extra DB calls — we already fetched users/clients/sites)
+    const uMap = {}; (users || []).forEach(u => { uMap[u.id] = u; });
+    const cMap = {}; (clients || []).forEach(c => { cMap[c.id] = c; });
+    const sMap = {}; (sites || []).forEach(s => { sMap[s.id] = s; });
+    const rows = (attData || []).map(a => ({
+      ...a,
+      labour_name: uMap[a.labour_id]?.name || "Unknown",
+      designation: uMap[a.labour_id]?.designation || null,
+      photo_url: uMap[a.labour_id]?.photo_url || null,
+      client_name: cMap[a.client_id]?.name || "Unknown",
+      site_name: sMap[a.site_id]?.name || "Unknown",
+    }));
+
     const holidayDates = (holidays || []).map(h => h.date);
     const attByLabour = {};
     rows.forEach(r => { if (!attByLabour[r.labour_id]) attByLabour[r.labour_id] = []; attByLabour[r.labour_id].push(r.date); });
+
+    // Sunday auto-pay using BATCH function (no DB calls in loop)
     const sundayAutoPayMap = {};
     for (const l of (labours || [])) {
-      const { autoPay } = await calcSundayAutoPayForMonth(month, l.id, l.daily_wage, attByLabour[l.id] || [], holidayDates, config, l.date_of_joining);
+      const { autoPay } = calcSundayAutoPayBatch(month, l.id, l.daily_wage, attByLabour[l.id] || [], holidayDates, config, allSalaryHistory, l.date_of_joining);
       if (autoPay > 0) { sundayAutoPayMap[l.id] = autoPay; sundayAutoPayMap[l.id + "_name"] = l.name; sundayAutoPayMap[l.id + "_designation"] = l.designation || ""; }
     }
 
-    // Fetch adjustments for the month
-    const { data: adjData } = await supabase.from("daily_adjustments").select("labour_id, type, amount").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
     const adjustmentsMap = {};
     (adjData || []).forEach(a => {
       if (!adjustmentsMap[a.labour_id]) adjustmentsMap[a.labour_id] = { incentives: 0, deductions: 0 };
@@ -407,7 +438,7 @@ router.get("/reports/monthly", async (req, res) => {
       return res.send(Buffer.from(buf));
     }
     return res.json(rows);
-  } catch (err) { return res.status(500).json({ message: "Internal server error" }); }
+  } catch (err) { console.error(err); return res.status(500).json({ message: "Internal server error" }); }
 });
 
 router.get("/reports/labour/:id", async (req, res) => {
@@ -437,7 +468,7 @@ router.get("/reports/client/:id", async (req, res) => {
     const { id } = req.params; const { start, end, format } = req.query;
     if (!start || !end) return res.status(400).json({ message: "start/end required" });
     const { data: client } = await supabase.from("clients").select("id, name").eq("id", id).single();
-    const { data } = await supabase.from("attendance").select("*").eq("client_id", id).gte("date", start).lte("date", end).order("date").limit(10000);
+    const { data } = await supabase.from("attendance").select("*").eq("client_id", id).gte("date", start).lte("date", end).order("date").range(0, 9999);
     const rows = await enrichRows(data || []);
     if (format === "xlsx") {
       const buf = generateClientExcelReport(client, start, end, rows);
@@ -457,7 +488,7 @@ router.get("/reports/site/:id", async (req, res) => {
     const { data: site } = await supabase.from("sites").select("id, name, client_id").eq("id", id).single();
     let siteObj = site;
     if (site) { const { data: cl } = await supabase.from("clients").select("name").eq("id", site.client_id).single(); siteObj = { ...site, client_name: cl?.name || "" }; }
-    const { data } = await supabase.from("attendance").select("*").eq("site_id", id).gte("date", start).lte("date", end).order("date").limit(10000);
+    const { data } = await supabase.from("attendance").select("*").eq("site_id", id).gte("date", start).lte("date", end).order("date").range(0, 9999);
     const rows = await enrichRows(data || []);
     if (format === "xlsx") {
       const buf = generateSiteExcelReport(siteObj, start, end, rows);
@@ -474,10 +505,22 @@ router.get("/reports/payroll", async (req, res) => {
   try {
     const { month, format } = req.query; if (!month) return res.status(400).json({ message: "month required" });
     const config = await getConfig();
-    const { data: labours } = await supabase.from("users").select("id, name, daily_wage, designation, date_of_joining").eq("role", "labour").eq("status", "active").order("id");
-    const { data: attendance } = await supabase.from("attendance").select("*").gte("date", `${month}-01`).lt("date", nextMonthStart(month)).limit(10000);
-    const { data: holidays } = await supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
-    const { data: adjustments } = await supabase.from("daily_adjustments").select("labour_id, type, amount").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
+
+    // Parallel queries
+    const [
+      { data: labours },
+      { data: attendance },
+      { data: holidays },
+      { data: adjustments },
+      { data: allSalaryHistory },
+    ] = await Promise.all([
+      supabase.from("users").select("id, name, daily_wage, designation, date_of_joining").eq("role", "labour").eq("status", "active").order("id"),
+      supabase.from("attendance").select("*").gte("date", `${month}-01`).lt("date", nextMonthStart(month)).range(0, 9999),
+      supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month)),
+      supabase.from("daily_adjustments").select("labour_id, type, amount").gte("date", `${month}-01`).lt("date", nextMonthStart(month)),
+      supabase.from("salary_history").select("labour_id, salary, effective_date").order("effective_date", { ascending: true }),
+    ]);
+
     const holidayDates = (holidays || []).map(h => h.date);
     const attByLabour = {};
     (attendance || []).forEach(a => { if (!attByLabour[a.labour_id]) attByLabour[a.labour_id] = []; attByLabour[a.labour_id].push(a); });
@@ -491,7 +534,8 @@ router.get("/reports/payroll", async (req, res) => {
     for (const l of (labours || [])) {
       const recs = attByLabour[l.id] || [];
       const attendanceDates = recs.map(r => r.date);
-      const { autoPay } = await calcSundayAutoPayForMonth(month, l.id, l.daily_wage, attendanceDates, holidayDates, config, l.date_of_joining);
+      // Batch auto-pay — no DB calls in loop
+      const { autoPay } = calcSundayAutoPayBatch(month, l.id, l.daily_wage, attendanceDates, holidayDates, config, allSalaryHistory, l.date_of_joining);
       const adj = adjByLabour[l.id] || { incentives: 0, deductions: 0 };
       const basePay = recs.reduce((s, r) => s + (r.total_pay || 0), 0) + autoPay;
       rows.push({
@@ -1113,10 +1157,10 @@ router.get("/analytics", async (req, res) => {
     ] = await Promise.all([
       supabase.from("users").select("id, name, daily_wage, designation, date_of_joining").eq("role", "labour").eq("status", "active"),
       supabase.from("advance_payments").select("labour_id, amount"),
-      supabase.from("attendance").select("labour_id, total_pay, client_id").eq("date", today).limit(10000),
-      supabase.from("attendance").select("labour_id, total_pay, regular_pay, ot_pay, hours_worked, client_id, site_id, date, is_sunday, is_holiday").gte("date", monthStart).limit(10000),
+      supabase.from("attendance").select("labour_id, total_pay, client_id").eq("date", today).range(0, 9999),
+      supabase.from("attendance").select("labour_id, total_pay, regular_pay, ot_pay, hours_worked, client_id, site_id, date, is_sunday, is_holiday").gte("date", monthStart).range(0, 9999),
       supabase.from("holidays").select("date").gte("date", monthStart).lt("date", nextMonthStart(monthStr)),
-      supabase.from("attendance").select("date, total_pay").gte("date", toDateStr(twoWeeksAgo)).limit(10000),
+      supabase.from("attendance").select("date, total_pay").gte("date", toDateStr(twoWeeksAgo)).range(0, 9999),
       supabase.from("clients").select("id, name"),
       supabase.from("sites").select("id, name, client_id"),
       supabase.from("salary_history").select("labour_id, salary, effective_date").order("effective_date", { ascending: true }),
@@ -1204,10 +1248,21 @@ router.get("/reports/payroll-with-incentives", async (req, res) => {
     if (!month) return res.status(400).json({ message: "month required" });
 
     const config = await getConfig();
-    const { data: labours } = await supabase.from("users").select("id, name, daily_wage, designation, date_of_joining").eq("role", "labour").eq("status", "active").order("id");
-    const { data: attendance } = await supabase.from("attendance").select("*").gte("date", `${month}-01`).lt("date", nextMonthStart(month)).limit(10000);
-    const { data: rules } = await supabase.from("incentive_rules").select("*").eq("active", true);
-    const { data: holidays } = await supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
+
+    // Parallel queries
+    const [
+      { data: labours },
+      { data: attendance },
+      { data: rules },
+      { data: holidays },
+      { data: allSalaryHistory },
+    ] = await Promise.all([
+      supabase.from("users").select("id, name, daily_wage, designation, date_of_joining").eq("role", "labour").eq("status", "active").order("id"),
+      supabase.from("attendance").select("*").gte("date", `${month}-01`).lt("date", nextMonthStart(month)).range(0, 9999),
+      supabase.from("incentive_rules").select("*").eq("active", true),
+      supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month)),
+      supabase.from("salary_history").select("labour_id, salary, effective_date").order("effective_date", { ascending: true }),
+    ]);
     const holidayDates = (holidays || []).map(h => h.date);
 
     const attByLabour = {};
@@ -1219,7 +1274,7 @@ router.get("/reports/payroll-with-incentives", async (req, res) => {
     const rows = [];
     for (const l of (labours || [])) {
       const recs = attByLabour[l.id] || [];
-      const { autoPay } = await calcSundayAutoPayForMonth(month, l.id, l.daily_wage, recs.map(r => r.date), holidayDates, config, l.date_of_joining);
+      const { autoPay } = calcSundayAutoPayBatch(month, l.id, l.daily_wage, recs.map(r => r.date), holidayDates, config, allSalaryHistory, l.date_of_joining);
       const base = {
         labour_id: l.id, labour_name: l.name, designation: l.designation || "", daily_wage: l.daily_wage,
         days_worked: recs.length,
