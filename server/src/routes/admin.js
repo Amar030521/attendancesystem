@@ -18,6 +18,27 @@ const upload = multer();
 router.use(authMiddleware, requireRole("admin"));
 
 /**
+ * Fetch ALL rows from a Supabase query, paginating in batches of 1000.
+ * Supabase/PostgREST has a hard server-side limit of 1000 rows per request.
+ *
+ * Usage: const rows = await fetchAllRows(() => supabase.from("attendance").select("*").gte("date", "2026-04-01"));
+ * Pass a FUNCTION that returns a fresh query builder each time.
+ */
+async function fetchAllRows(queryFn, pageSize = 1000) {
+  let allRows = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await queryFn().range(from, from + pageSize - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    allRows = allRows.concat(data);
+    if (data.length < pageSize) break;
+    from += pageSize;
+  }
+  return allRows;
+}
+
+/**
  * Get the effective salary for a labour on a specific date.
  * Looks up salary_history for the most recent entry where effective_date <= targetDate.
  * Falls back to users.daily_wage if no salary_history exists (backward compatibility).
@@ -380,8 +401,9 @@ router.get("/reports/monthly", async (req, res) => {
     const config = await getConfig();
 
     // Run ALL independent queries in parallel
+    // Fetch attendance with pagination (Supabase caps at 1000 rows per request)
     const [
-      { data: attData },
+      attData,
       { data: labours },
       { data: holidays },
       { data: adjData },
@@ -390,7 +412,7 @@ router.get("/reports/monthly", async (req, res) => {
       { data: clients },
       { data: sites },
     ] = await Promise.all([
-      supabase.from("attendance").select("*").gte("date", `${month}-01`).lt("date", nextMonthStart(month)).order("labour_id").range(0, 9999),
+      fetchAllRows(() => supabase.from("attendance").select("*").gte("date", `${month}-01`).lt("date", nextMonthStart(month)).order("labour_id")),
       supabase.from("users").select("id, name, daily_wage, designation, date_of_joining").eq("role", "labour").eq("status", "active"),
       supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month)),
       supabase.from("daily_adjustments").select("labour_id, type, amount").gte("date", `${month}-01`).lt("date", nextMonthStart(month)),
@@ -468,7 +490,7 @@ router.get("/reports/client/:id", async (req, res) => {
     const { id } = req.params; const { start, end, format } = req.query;
     if (!start || !end) return res.status(400).json({ message: "start/end required" });
     const { data: client } = await supabase.from("clients").select("id, name").eq("id", id).single();
-    const { data } = await supabase.from("attendance").select("*").eq("client_id", id).gte("date", start).lte("date", end).order("date").range(0, 9999);
+    const data = await fetchAllRows(() => supabase.from("attendance").select("*").eq("client_id", id).gte("date", start).lte("date", end).order("date"));
     const rows = await enrichRows(data || []);
     if (format === "xlsx") {
       const buf = generateClientExcelReport(client, start, end, rows);
@@ -488,7 +510,7 @@ router.get("/reports/site/:id", async (req, res) => {
     const { data: site } = await supabase.from("sites").select("id, name, client_id").eq("id", id).single();
     let siteObj = site;
     if (site) { const { data: cl } = await supabase.from("clients").select("name").eq("id", site.client_id).single(); siteObj = { ...site, client_name: cl?.name || "" }; }
-    const { data } = await supabase.from("attendance").select("*").eq("site_id", id).gte("date", start).lte("date", end).order("date").range(0, 9999);
+    const data = await fetchAllRows(() => supabase.from("attendance").select("*").eq("site_id", id).gte("date", start).lte("date", end).order("date"));
     const rows = await enrichRows(data || []);
     if (format === "xlsx") {
       const buf = generateSiteExcelReport(siteObj, start, end, rows);
@@ -509,13 +531,13 @@ router.get("/reports/payroll", async (req, res) => {
     // Parallel queries
     const [
       { data: labours },
-      { data: attendance },
+      attendance,
       { data: holidays },
       { data: adjustments },
       { data: allSalaryHistory },
     ] = await Promise.all([
       supabase.from("users").select("id, name, daily_wage, designation, date_of_joining").eq("role", "labour").eq("status", "active").order("id"),
-      supabase.from("attendance").select("*").gte("date", `${month}-01`).lt("date", nextMonthStart(month)).range(0, 9999),
+      fetchAllRows(() => supabase.from("attendance").select("*").gte("date", `${month}-01`).lt("date", nextMonthStart(month))),
       supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month)),
       supabase.from("daily_adjustments").select("labour_id, type, amount").gte("date", `${month}-01`).lt("date", nextMonthStart(month)),
       supabase.from("salary_history").select("labour_id, salary, effective_date").order("effective_date", { ascending: true }),
@@ -1148,19 +1170,19 @@ router.get("/analytics", async (req, res) => {
       { data: labours },
       { data: advData },
       { data: todayAtt },
-      { data: monthAtt },
+      monthAtt,
       { data: holidaysData },
-      { data: trendData },
+      trendData,
       { data: clients },
       { data: sitesList },
       { data: allSalaryHistory },
     ] = await Promise.all([
       supabase.from("users").select("id, name, daily_wage, designation, date_of_joining").eq("role", "labour").eq("status", "active"),
       supabase.from("advance_payments").select("labour_id, amount"),
-      supabase.from("attendance").select("labour_id, total_pay, client_id").eq("date", today).range(0, 9999),
-      supabase.from("attendance").select("labour_id, total_pay, regular_pay, ot_pay, hours_worked, client_id, site_id, date, is_sunday, is_holiday").gte("date", monthStart).range(0, 9999),
+      supabase.from("attendance").select("labour_id, total_pay, client_id").eq("date", today).range(0, 999),
+      fetchAllRows(() => supabase.from("attendance").select("labour_id, total_pay, regular_pay, ot_pay, hours_worked, client_id, site_id, date, is_sunday, is_holiday").gte("date", monthStart)),
       supabase.from("holidays").select("date").gte("date", monthStart).lt("date", nextMonthStart(monthStr)),
-      supabase.from("attendance").select("date, total_pay").gte("date", toDateStr(twoWeeksAgo)).range(0, 9999),
+      fetchAllRows(() => supabase.from("attendance").select("date, total_pay").gte("date", toDateStr(twoWeeksAgo))),
       supabase.from("clients").select("id, name"),
       supabase.from("sites").select("id, name, client_id"),
       supabase.from("salary_history").select("labour_id, salary, effective_date").order("effective_date", { ascending: true }),
@@ -1252,13 +1274,13 @@ router.get("/reports/payroll-with-incentives", async (req, res) => {
     // Parallel queries
     const [
       { data: labours },
-      { data: attendance },
+      attendance,
       { data: rules },
       { data: holidays },
       { data: allSalaryHistory },
     ] = await Promise.all([
       supabase.from("users").select("id, name, daily_wage, designation, date_of_joining").eq("role", "labour").eq("status", "active").order("id"),
-      supabase.from("attendance").select("*").gte("date", `${month}-01`).lt("date", nextMonthStart(month)).range(0, 9999),
+      fetchAllRows(() => supabase.from("attendance").select("*").gte("date", `${month}-01`).lt("date", nextMonthStart(month))),
       supabase.from("incentive_rules").select("*").eq("active", true),
       supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month)),
       supabase.from("salary_history").select("labour_id, salary, effective_date").order("effective_date", { ascending: true }),

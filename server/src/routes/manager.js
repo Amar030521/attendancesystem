@@ -70,6 +70,20 @@ async function calcSundayAutoPayForMonth(monthStr, labourId, dailyWageFallback, 
 }
 router.use(authMiddleware, requireRole("manager"));
 
+async function fetchAllRows(queryFn, pageSize = 1000) {
+  let allRows = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await queryFn().range(from, from + pageSize - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    allRows = allRows.concat(data);
+    if (data.length < pageSize) break;
+    from += pageSize;
+  }
+  return allRows;
+}
+
 function toDateStr(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
@@ -219,7 +233,7 @@ router.get("/reports/monthly", async (req, res) => {
     const { month, format } = req.query; if (!month) return res.status(400).json({ message: "month required" });
     const { data: cfgRows } = await supabase.from("config").select("key, value");
     const config = {}; (cfgRows || []).forEach(r => { config[r.key] = r.value; });
-    const { data } = await supabase.from("attendance").select("*, users(name, designation, photo_url), clients(name), sites(name)").gte("date", `${month}-01`).lt("date", nextMonthStart(month)).order("date").order("labour_id").range(0, 9999);
+    const data = await fetchAllRows(() => supabase.from("attendance").select("*, users(name, designation, photo_url), clients(name), sites(name)").gte("date", `${month}-01`).lt("date", nextMonthStart(month)).order("date").order("labour_id"));
     const rows = (data || []).map(a => ({ ...a, labour_name: a.users?.name, designation: a.users?.designation, client_name: a.clients?.name, site_name: a.sites?.name }));
     const { data: labours } = await supabase.from("users").select("id, name, daily_wage, designation, date_of_joining").eq("role", "labour").eq("status", "active");
     const { data: holidays } = await supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
@@ -243,7 +257,7 @@ router.get("/reports/payroll", async (req, res) => {
     const { data: cfgRows } = await supabase.from("config").select("key, value");
     const config = {}; (cfgRows || []).forEach(r => { config[r.key] = r.value; });
     const { data: labours } = await supabase.from("users").select("id, name, daily_wage, designation, date_of_joining").eq("role", "labour").eq("status", "active").order("id");
-    const { data: attendance } = await supabase.from("attendance").select("*").gte("date", `${month}-01`).lt("date", nextMonthStart(month)).range(0, 9999);
+    const attendance = await fetchAllRows(() => supabase.from("attendance").select("*").gte("date", `${month}-01`).lt("date", nextMonthStart(month)));
     const { data: holidays } = await supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
     const holidayDates = (holidays || []).map(h => h.date);
     const attByLabour = {}; (attendance || []).forEach(a => { if (!attByLabour[a.labour_id]) attByLabour[a.labour_id] = []; attByLabour[a.labour_id].push(a); });
@@ -279,7 +293,7 @@ router.get("/reports/labour/:id", async (req, res) => {
 router.get("/reports/client/:id", async (req, res) => {
   try {
     const { start, end, format } = req.query; const { id } = req.params;
-    const { data } = await supabase.from("attendance").select("*, users(name, designation), sites(name)").eq("client_id", id).gte("date", start).lte("date", end).order("date").range(0, 9999);
+    const data = await fetchAllRows(() => supabase.from("attendance").select("*, users(name, designation), sites(name)").eq("client_id", id).gte("date", start).lte("date", end).order("date"));
     const rows = (data || []).map(a => ({ ...a, labour_name: a.users?.name, designation: a.users?.designation, site_name: a.sites?.name }));
     const { data: client } = await supabase.from("clients").select("name").eq("id", id).single();
     if (format === "xlsx") { const buf = generateClientExcelReport(start, end, client?.name || id, rows); res.setHeader("Content-Disposition", `attachment; filename="Client_${id}.xlsx"`); res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"); return res.send(Buffer.from(buf)); }
@@ -290,7 +304,7 @@ router.get("/reports/client/:id", async (req, res) => {
 router.get("/reports/site/:id", async (req, res) => {
   try {
     const { start, end, format } = req.query; const { id } = req.params;
-    const { data } = await supabase.from("attendance").select("*, users(name, designation), clients(name)").eq("site_id", id).gte("date", start).lte("date", end).order("date").range(0, 9999);
+    const data = await fetchAllRows(() => supabase.from("attendance").select("*, users(name, designation), clients(name)").eq("site_id", id).gte("date", start).lte("date", end).order("date"));
     const rows = (data || []).map(a => ({ ...a, labour_name: a.users?.name, designation: a.users?.designation, client_name: a.clients?.name }));
     const { data: site } = await supabase.from("sites").select("name").eq("id", id).single();
     if (format === "xlsx") { const buf = generateSiteExcelReport(start, end, site?.name || id, rows); res.setHeader("Content-Disposition", `attachment; filename="Site_${id}.xlsx"`); res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"); return res.send(Buffer.from(buf)); }
