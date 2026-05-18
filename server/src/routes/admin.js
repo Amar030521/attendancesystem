@@ -1347,3 +1347,56 @@ router.get("/reports/payroll-with-incentives", async (req, res) => {
 });
 
 module.exports = router;
+// TEMPORARY DIAGNOSTIC — remove after debugging
+router.get("/debug/monthly-check", async (req, res) => {
+  try {
+    const { month } = req.query;
+    if (!month) return res.status(400).json({ message: "month required" });
+    
+    // Query 1: How many attendance rows for the month?
+    const { data: allAtt, count: attCount } = await supabase
+      .from("attendance")
+      .select("labour_id, date", { count: "exact" })
+      .gte("date", `${month}-01`)
+      .lt("date", `${parseInt(month.split("-")[0])}-${String(parseInt(month.split("-")[1]) + 1).padStart(2, "0")}-01`)
+      .range(0, 9999);
+    
+    // Query 2: Which labour_ids have attendance?
+    const labourIds = [...new Set((allAtt || []).map(a => a.labour_id))].sort((a,b) => a-b);
+    
+    // Query 3: Specific check for labour 5049
+    const { data: att5049 } = await supabase
+      .from("attendance")
+      .select("id, labour_id, date, total_pay")
+      .eq("labour_id", 5049)
+      .gte("date", `${month}-01`)
+      .lt("date", `${parseInt(month.split("-")[0])}-${String(parseInt(month.split("-")[1]) + 1).padStart(2, "0")}-01`);
+    
+    // Query 4: All labours with role=labour
+    const { data: labours } = await supabase
+      .from("users")
+      .select("id, name, role, status")
+      .eq("role", "labour")
+      .eq("status", "active")
+      .order("id");
+    
+    const labourIdSet = new Set(labours.map(l => l.id));
+    const attLabourIdSet = new Set(labourIds);
+    const missingFromAtt = labours.filter(l => !attLabourIdSet.has(l.id)).map(l => ({ id: l.id, name: l.name }));
+    
+    return res.json({
+      month,
+      totalAttendanceRows: allAtt?.length,
+      exactCount: attCount,
+      uniqueLabourIdsInAttendance: labourIds.length,
+      labourIdsRange: { min: labourIds[0], max: labourIds[labourIds.length-1] },
+      allLabourIdsInAttendance: labourIds,
+      totalActiveLabours: labours?.length,
+      laboursWithNoAttendance: missingFromAtt,
+      labour5049: {
+        attendanceRows: att5049?.length,
+        records: att5049?.slice(0, 5),
+      },
+    });
+  } catch (err) { console.error(err); return res.status(500).json({ message: err.message }); }
+});
