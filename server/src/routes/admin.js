@@ -352,7 +352,7 @@ router.get("/reports/daily", async (req, res) => {
     let query = supabase.from("attendance").select("*").eq("date", date);
     if (client_id) query = query.eq("client_id", client_id);
     if (site_ids) { const sl = site_ids.split(",").filter(Boolean); if (sl.length) query = query.in("site_id", sl); }
-    const { data } = await query.order("labour_id");
+    const { data } = await query.order("labour_id").limit(10000);
     const rows = await enrichRows(data || []);
     let fl = "";
     if (client_id) { const { data: c } = await supabase.from("clients").select("name").eq("id", client_id).single(); fl = c?.name || ""; }
@@ -378,7 +378,7 @@ router.get("/reports/monthly", async (req, res) => {
   try {
     const { month, format } = req.query; if (!month) return res.status(400).json({ message: "month required" });
     const config = await getConfig();
-    const { data } = await supabase.from("attendance").select("*").gte("date", `${month}-01`).lt("date", nextMonthStart(month)).order("labour_id");
+    const { data } = await supabase.from("attendance").select("*").gte("date", `${month}-01`).lt("date", nextMonthStart(month)).order("labour_id").limit(10000);
     const rows = await enrichRows(data || []);
     const { data: labours } = await supabase.from("users").select("id, name, daily_wage, designation, date_of_joining").eq("role", "labour").eq("status", "active");
     const { data: holidays } = await supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
@@ -437,7 +437,7 @@ router.get("/reports/client/:id", async (req, res) => {
     const { id } = req.params; const { start, end, format } = req.query;
     if (!start || !end) return res.status(400).json({ message: "start/end required" });
     const { data: client } = await supabase.from("clients").select("id, name").eq("id", id).single();
-    const { data } = await supabase.from("attendance").select("*").eq("client_id", id).gte("date", start).lte("date", end).order("date");
+    const { data } = await supabase.from("attendance").select("*").eq("client_id", id).gte("date", start).lte("date", end).order("date").limit(10000);
     const rows = await enrichRows(data || []);
     if (format === "xlsx") {
       const buf = generateClientExcelReport(client, start, end, rows);
@@ -457,7 +457,7 @@ router.get("/reports/site/:id", async (req, res) => {
     const { data: site } = await supabase.from("sites").select("id, name, client_id").eq("id", id).single();
     let siteObj = site;
     if (site) { const { data: cl } = await supabase.from("clients").select("name").eq("id", site.client_id).single(); siteObj = { ...site, client_name: cl?.name || "" }; }
-    const { data } = await supabase.from("attendance").select("*").eq("site_id", id).gte("date", start).lte("date", end).order("date");
+    const { data } = await supabase.from("attendance").select("*").eq("site_id", id).gte("date", start).lte("date", end).order("date").limit(10000);
     const rows = await enrichRows(data || []);
     if (format === "xlsx") {
       const buf = generateSiteExcelReport(siteObj, start, end, rows);
@@ -475,7 +475,7 @@ router.get("/reports/payroll", async (req, res) => {
     const { month, format } = req.query; if (!month) return res.status(400).json({ message: "month required" });
     const config = await getConfig();
     const { data: labours } = await supabase.from("users").select("id, name, daily_wage, designation, date_of_joining").eq("role", "labour").eq("status", "active").order("id");
-    const { data: attendance } = await supabase.from("attendance").select("*").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
+    const { data: attendance } = await supabase.from("attendance").select("*").gte("date", `${month}-01`).lt("date", nextMonthStart(month)).limit(10000);
     const { data: holidays } = await supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
     const { data: adjustments } = await supabase.from("daily_adjustments").select("labour_id, type, amount").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
     const holidayDates = (holidays || []).map(h => h.date);
@@ -1113,10 +1113,10 @@ router.get("/analytics", async (req, res) => {
     ] = await Promise.all([
       supabase.from("users").select("id, name, daily_wage, designation, date_of_joining").eq("role", "labour").eq("status", "active"),
       supabase.from("advance_payments").select("labour_id, amount"),
-      supabase.from("attendance").select("labour_id, total_pay, client_id").eq("date", today),
-      supabase.from("attendance").select("labour_id, total_pay, regular_pay, ot_pay, hours_worked, client_id, site_id, date, is_sunday, is_holiday").gte("date", monthStart),
+      supabase.from("attendance").select("labour_id, total_pay, client_id").eq("date", today).limit(10000),
+      supabase.from("attendance").select("labour_id, total_pay, regular_pay, ot_pay, hours_worked, client_id, site_id, date, is_sunday, is_holiday").gte("date", monthStart).limit(10000),
       supabase.from("holidays").select("date").gte("date", monthStart).lt("date", nextMonthStart(monthStr)),
-      supabase.from("attendance").select("date, total_pay").gte("date", toDateStr(twoWeeksAgo)),
+      supabase.from("attendance").select("date, total_pay").gte("date", toDateStr(twoWeeksAgo)).limit(10000),
       supabase.from("clients").select("id, name"),
       supabase.from("sites").select("id, name, client_id"),
       supabase.from("salary_history").select("labour_id, salary, effective_date").order("effective_date", { ascending: true }),
@@ -1205,7 +1205,7 @@ router.get("/reports/payroll-with-incentives", async (req, res) => {
 
     const config = await getConfig();
     const { data: labours } = await supabase.from("users").select("id, name, daily_wage, designation, date_of_joining").eq("role", "labour").eq("status", "active").order("id");
-    const { data: attendance } = await supabase.from("attendance").select("*").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
+    const { data: attendance } = await supabase.from("attendance").select("*").gte("date", `${month}-01`).lt("date", nextMonthStart(month)).limit(10000);
     const { data: rules } = await supabase.from("incentive_rules").select("*").eq("active", true);
     const { data: holidays } = await supabase.from("holidays").select("date").gte("date", `${month}-01`).lt("date", nextMonthStart(month));
     const holidayDates = (holidays || []).map(h => h.date);
