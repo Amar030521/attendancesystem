@@ -24,6 +24,15 @@ router.use(authMiddleware, requireRole("admin"));
  * Usage: const rows = await fetchAllRows(() => supabase.from("attendance").select("*").gte("date", "2026-04-01"));
  * Pass a FUNCTION that returns a fresh query builder each time.
  */
+/** Count total Sundays in a given month */
+function countSundaysInMonth(monthStr) {
+  const [y, m] = monthStr.split("-").map(Number);
+  const dim = new Date(y, m, 0).getDate();
+  let count = 0;
+  for (let d = 1; d <= dim; d++) { if (new Date(y, m - 1, d).getDay() === 0) count++; }
+  return count;
+}
+
 async function fetchAllRows(queryFn, pageSize = 1000) {
   let allRows = [];
   let from = 0;
@@ -454,7 +463,9 @@ router.get("/reports/monthly", async (req, res) => {
     });
 
     if (format === "xlsx") {
-      const buf = generateMonthlyExcelReport(month, rows, sundayAutoPayMap, adjustmentsMap, labours);
+      const totalSundays = countSundaysInMonth(month);
+      const totalHolidays = (holidays || []).length;
+      const buf = generateMonthlyExcelReport(month, rows, sundayAutoPayMap, adjustmentsMap, labours, totalSundays, totalHolidays);
       res.setHeader("Content-Disposition", `attachment; filename="Monthly_Summary_${month}.xlsx"`);
       res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
       return res.send(Buffer.from(buf));
@@ -475,7 +486,9 @@ router.get("/reports/labour/:id", async (req, res) => {
     const holidayDates = (holidays || []).map(h => h.date);
     const { autoPay } = await calcSundayAutoPayForMonth(month, id, labour?.daily_wage || 0, rows.map(r => r.date), holidayDates, config, labour?.date_of_joining);
     if (format === "xlsx") {
-      const buf = generateLabourExcelReport(labour, month, rows, autoPay);
+      const totalSundays = countSundaysInMonth(month);
+      const totalHolidays = (holidays || []).length;
+      const buf = generateLabourExcelReport(labour, month, rows, autoPay, totalSundays, totalHolidays);
       const fn = `${safeName(labour?.name)}_Report_${month}.xlsx`;
       res.setHeader("Content-Disposition", `attachment; filename="${fn}"`);
       res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
@@ -576,7 +589,9 @@ router.get("/reports/payroll", async (req, res) => {
       });
     }
     if (format === "xlsx") {
-      const buf = generatePayrollExcelReport(month, rows);
+      const totalSundays = countSundaysInMonth(month);
+      const totalHolidays = (holidays || []).length;
+      const buf = generatePayrollExcelReport(month, rows, totalSundays, totalHolidays);
       res.setHeader("Content-Disposition", `attachment; filename="Payroll_Summary_${month}.xlsx"`);
       res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
       return res.send(Buffer.from(buf));
@@ -1343,21 +1358,25 @@ router.get("/reports/payroll-with-incentives", async (req, res) => {
     }
 
     if (format === "xlsx") {
-      const XLSX = require("xlsx");
-      const data = [["PAYROLL WITH INCENTIVES"], [`Month: ${month}`], [],
-        ["Labour ID", "Name", "Designation", "Daily Wage", "Days", "Hours", "Regular", "OT", "Sunday", "Holiday", "Base Pay", "Incentive", "Grand Total"]];
+      const XLSX = require("xlsx-js-style");
+      const totalSundays = countSundaysInMonth(month);
+      const totalHolidays = (holidays || []).length;
+      const data = [["PAYROLL WITH INCENTIVES"], [`Month: ${month} | Total Sundays: ${totalSundays} | Total Holidays: ${totalHolidays}`], [],
+        ["Labour ID", "Name", "Designation", "Daily Wage", "Days", "Hours", "Regular", "OT", "Total Sun", "Worked Sun", "Total Hol", "Worked Hol", "Base Pay", "Incentive", "Grand Total"]];
       let grandBase = 0, grandInc = 0;
       rows.forEach(r => {
         grandBase += r.total_pay; grandInc += r.incentive;
         data.push([r.labour_id, r.labour_name, r.designation || "", r.daily_wage, r.days_worked,
           Math.round(r.total_hours * 100) / 100, Math.round(r.total_regular * 100) / 100,
-          Math.round(r.total_ot * 100) / 100, r.sunday_days, r.holiday_days,
+          Math.round(r.total_ot * 100) / 100, totalSundays, r.sunday_days || 0, totalHolidays, r.holiday_days || 0,
           Math.round(r.total_pay * 100) / 100, Math.round(r.incentive * 100) / 100,
           Math.round(r.grand_total * 100) / 100]);
       });
-      data.push([], ["", "", "", "", "", "", "", "", "", "", "TOTAL", Math.round(grandBase * 100) / 100, Math.round(grandInc * 100) / 100, Math.round((grandBase + grandInc) * 100) / 100]);
+      data.push([], ["", "", "", "", "", "", "", "", "", "", "", "TOTAL", Math.round(grandBase * 100) / 100, Math.round(grandInc * 100) / 100, Math.round((grandBase + grandInc) * 100) / 100]);
       const ws = XLSX.utils.aoa_to_sheet(data);
-      ws["!cols"] = [{ wch: 10 }, { wch: 20 }, { wch: 16 }, { wch: 12 }, { wch: 6 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
+      ws["!cols"] = [{ wch: 10 }, { wch: 20 }, { wch: 16 }, { wch: 12 }, { wch: 6 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
+      // Color header row
+      for (let c = 0; c < 15; c++) { const ref = XLSX.utils.encode_cell({ r: 3, c }); if (ws[ref]) ws[ref].s = { fill: { fgColor: { rgb: "D6E4F0" } }, font: { bold: true } }; }
       const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Payroll");
       const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
       res.setHeader("Content-Disposition", `attachment; filename="Payroll_Incentives_${month}.xlsx"`);

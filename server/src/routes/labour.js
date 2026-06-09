@@ -184,18 +184,67 @@ router.get("/attendance", async (req, res) => {
       startDate = start; endDate = end;
     }
 
-    const { data } = await supabase
-      .from("attendance").select("*, clients(name), sites(name)")
-      .eq("labour_id", labourId).gte("date", startDate).lte("date", endDate)
-      .order("date", { ascending: false });
+    // Fetch attendance, adjustments, holidays, user info, and config in parallel
+    const [
+      { data: attData },
+      { data: adjData },
+      { data: holidays },
+      { data: userInfo },
+      config,
+    ] = await Promise.all([
+      supabase.from("attendance").select("*, clients(name), sites(name)")
+        .eq("labour_id", labourId).gte("date", startDate).lte("date", endDate)
+        .order("date", { ascending: false }),
+      supabase.from("daily_adjustments").select("id, type, amount, date, remarks")
+        .eq("labour_id", labourId).gte("date", startDate).lte("date", endDate)
+        .order("date", { ascending: false }),
+      supabase.from("holidays").select("date"),
+      supabase.from("users").select("date_of_joining").eq("id", labourId).single(),
+      (async () => {
+        const { data: cfgRows } = await supabase.from("config").select("key, value");
+        const c = {}; (cfgRows || []).forEach(r => { c[r.key] = r.value; }); return c;
+      })(),
+    ]);
 
-    const rows = (data || []).map(a => ({ ...a, client_name: a.clients?.name, site_name: a.sites?.name, clients: undefined, sites: undefined }));
+    const rows = (attData || []).map(a => ({ ...a, client_name: a.clients?.name, site_name: a.sites?.name, clients: undefined, sites: undefined }));
+    const attendanceDateSet = new Set(rows.map(r => r.date));
+    const holidayDateSet = new Set((holidays || []).map(h => h.date));
+    const joiningDate = userInfo?.date_of_joining || null;
 
-    // Also fetch adjustments for this period
-    const { data: adjData } = await supabase.from("daily_adjustments").select("id, type, amount, date, remarks")
-      .eq("labour_id", labourId).gte("date", startDate).lte("date", endDate).order("date", { ascending: false });
+    // Build Sunday/Holiday rest entries for the period (server-side, using date-aware salary)
+    const sundayRestDates = [];
+    const sd = new Date(startDate + "T00:00:00Z");
+    const ed = new Date(endDate + "T00:00:00Z");
+    for (let d = new Date(sd); d <= ed; d.setUTCDate(d.getUTCDate() + 1)) {
+      const ds = d.toISOString().slice(0, 10);
+      const isSun = d.getUTCDay() === 0;
+      const isHol = holidayDateSet.has(ds);
+      if ((isSun || isHol) && !attendanceDateSet.has(ds)) {
+        if (joiningDate && ds < joiningDate) continue; // Skip before joining
+        sundayRestDates.push({ date: ds, is_sunday: isSun, is_holiday: isHol });
+      }
+    }
 
-    return res.json({ attendance: rows, adjustments: adjData || [] });
+    // Get date-aware salary for each rest day
+    const salaryMap = sundayRestDates.length > 0
+      ? await getSalaryMapForDates(labourId, sundayRestDates.map(d => d.date))
+      : {};
+
+    const sundayRestEntries = sundayRestDates.map(d => {
+      const wage = salaryMap[d.date] || 0;
+      const restPay = calculateSundayAutoPay(wage, d.date, config);
+      return {
+        id: `sunday-${d.date}`,
+        date: d.date,
+        is_sunday_rest: true,
+        is_sunday: d.is_sunday,
+        is_holiday: d.is_holiday,
+        rest_pay: Math.round(restPay * 100) / 100,
+        label: d.is_sunday ? "Sunday Rest Day" : "Holiday Rest Day",
+      };
+    });
+
+    return res.json({ attendance: rows, adjustments: adjData || [], sundayRestEntries });
   } catch (err) { console.error("Labour attendance error:", err); return res.status(500).json({ message: "Internal server error" }); }
 });
 
