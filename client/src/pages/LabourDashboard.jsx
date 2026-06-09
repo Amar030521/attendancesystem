@@ -3,7 +3,7 @@ import { api, getStoredUser } from "../api";
 import { LayoutShell } from "../components/LayoutShell";
 import { LoadingSpinner } from "../components/LoadingSpinner";
 import { Avatar } from "../components/LabourManagement";
-import { calculatePayment, calculateSundayAutoPay } from "../utils/calculatePayment";
+import { calculatePayment } from "../utils/calculatePayment";
 
 function formatCurrency(amount) {
   return new Intl.NumberFormat("en-AE", {
@@ -39,6 +39,7 @@ export function LabourDashboard() {
   const [period, setPeriod] = useState("week");
   const [history, setHistory] = useState([]);
   const [historyAdjustments, setHistoryAdjustments] = useState([]);
+  const [historySundayRest, setHistorySundayRest] = useState([]);
   const [customRange, setCustomRange] = useState({ start: todayISO(), end: todayISO() });
   const [historyLoading, setHistoryLoading] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState(null);
@@ -106,16 +107,18 @@ export function LabourDashboard() {
       let url = `/labour/attendance?period=${period}`;
       if (period === "custom") url += `&start=${customRange.start}&end=${customRange.end}`;
       const res = await api.get(url);
-      // Handle both old (array) and new ({ attendance, adjustments }) response shapes
+      // Handle both old (array) and new ({ attendance, adjustments, sundayRestEntries }) response shapes
       if (Array.isArray(res.data)) {
         setHistory(res.data);
         setHistoryAdjustments([]);
+        setHistorySundayRest([]);
       } else {
         setHistory(res.data?.attendance || []);
         setHistoryAdjustments(res.data?.adjustments || []);
+        setHistorySundayRest(res.data?.sundayRestEntries || []);
       }
     } catch (err) {
-      console.error(err); setHistory([]); setHistoryAdjustments([]);
+      console.error(err); setHistory([]); setHistoryAdjustments([]); setHistorySundayRest([]);
     } finally {
       setHistoryLoading(false);
     }
@@ -489,48 +492,20 @@ export function LabourDashboard() {
   // ===================== TAB: HISTORY =====================
   function renderHistory() {
     const attendanceRecords = history ? [...history].sort((a, b) => new Date(b.date) - new Date(a.date)) : [];
-    const attendanceDateSet = new Set(attendanceRecords.map(r => r.date));
 
-    // Build Sunday/Holiday rest pay entries for the selected period
-    const sundayEntries = [];
-    if (config && summary?.dailyWage) {
-      let periodStart, periodEnd;
-      const uaeToday = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
-      if (period === "week") {
-        const d = new Date(); d.setDate(d.getDate() - 7);
-        periodStart = d.toISOString().slice(0, 10); periodEnd = uaeToday;
-      } else if (period === "month") {
-        const now = new Date();
-        periodStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
-        periodEnd = uaeToday;
-      } else if (period === "custom" && customRange.start && customRange.end) {
-        periodStart = customRange.start; periodEnd = customRange.end;
-      }
-      if (periodStart && periodEnd) {
-        const start = new Date(periodStart);
-        const end = new Date(periodEnd);
-        for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-          const ds = d.toISOString().slice(0, 10);
-          const isSun = d.getDay() === 0;
-          const isHol = (holidays || []).some(h => h.date === ds);
-          if ((isSun || isHol) && !attendanceDateSet.has(ds)) {
-            const restPay = calculateSundayAutoPay(summary.dailyWage, ds, config);
-            sundayEntries.push({
-              id: `sunday-${ds}`,
-              date: ds,
-              is_sunday_rest: true,
-              is_sunday: isSun,
-              is_holiday: isHol,
-              regular_pay: restPay,
-              ot_pay: 0,
-              total_pay: restPay,
-              hours_worked: 0,
-              client_name: isSun ? "Sunday Rest Day" : "Holiday Rest Day",
-            });
-          }
-        }
-      }
-    }
+    // Use Sunday/Holiday rest entries from backend (date-aware salary, respects joining date)
+    const sundayEntries = (historySundayRest || []).map(s => ({
+      id: s.id,
+      date: s.date,
+      is_sunday_rest: true,
+      is_sunday: s.is_sunday,
+      is_holiday: s.is_holiday,
+      regular_pay: s.rest_pay,
+      ot_pay: 0,
+      total_pay: s.rest_pay,
+      hours_worked: 0,
+      client_name: s.label || (s.is_sunday ? "Sunday Rest Day" : "Holiday Rest Day"),
+    }));
 
     // Build adjustment entries for the timeline
     const adjustmentEntries = (historyAdjustments || []).map(a => ({
@@ -548,10 +523,12 @@ export function LabourDashboard() {
 
     // Merge and sort all entries (attendance + Sunday rest + adjustments) newest first
     const sorted = [...attendanceRecords, ...sundayEntries, ...adjustmentEntries].sort((a, b) => new Date(b.date) - new Date(a.date));
-    const totalPay = sorted.reduce((s, r) => s + (r.total_pay || 0), 0);
+    // Base total = attendance + Sunday rest (EXCLUDES adjustments — matches admin/payroll)
+    const totalPay = sorted.filter(r => !r.is_adjustment).reduce((s, r) => s + (r.total_pay || 0), 0);
     const totalOT = sorted.filter(r => !r.is_adjustment).reduce((s, r) => s + (r.ot_pay || 0), 0);
     const totalIncentives = adjustmentEntries.filter(a => a.adjustment_type === "incentive").reduce((s, r) => s + r.amount, 0);
     const totalDeductions = adjustmentEntries.filter(a => a.adjustment_type === "deduction").reduce((s, r) => s + r.amount, 0);
+    const netPay = totalPay + totalIncentives - totalDeductions;
 
     return (
       <div className="space-y-4">
@@ -580,9 +557,12 @@ export function LabourDashboard() {
           <>
             {/* Period Summary */}
             <div className="bg-white rounded-2xl shadow-md p-4">
-              <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center justify-between mb-1">
                 <span className="text-sm font-bold text-gray-800">{sorted.length} Entries</span>
-                <span className="text-lg font-black text-green-600">{formatCurrency(totalPay)}</span>
+                <div className="text-right">
+                  {(totalIncentives > 0 || totalDeductions > 0) && <p className="text-[10px] text-gray-400">Base Pay</p>}
+                  <span className="text-lg font-black text-green-600">{formatCurrency(totalPay)}</span>
+                </div>
               </div>
               {totalOT > 0 && (
                 <div className="flex items-center gap-2 bg-orange-50 rounded-xl px-3 py-2 mb-1.5">
@@ -591,20 +571,26 @@ export function LabourDashboard() {
                 </div>
               )}
               {(totalIncentives > 0 || totalDeductions > 0) && (
-                <div className="flex gap-2 mt-1.5">
-                  {totalIncentives > 0 && (
-                    <div className="flex items-center gap-1 bg-emerald-50 rounded-lg px-2.5 py-1.5 flex-1">
-                      <span className="text-xs">🎁</span>
-                      <span className="text-[11px] text-emerald-700 font-semibold">+{formatCurrency(totalIncentives)}</span>
-                    </div>
-                  )}
-                  {totalDeductions > 0 && (
-                    <div className="flex items-center gap-1 bg-red-50 rounded-lg px-2.5 py-1.5 flex-1">
-                      <span className="text-xs">⚠️</span>
-                      <span className="text-[11px] text-red-600 font-semibold">-{formatCurrency(totalDeductions)}</span>
-                    </div>
-                  )}
-                </div>
+                <>
+                  <div className="flex gap-2 mt-1.5">
+                    {totalIncentives > 0 && (
+                      <div className="flex items-center gap-1 bg-emerald-50 rounded-lg px-2.5 py-1.5 flex-1">
+                        <span className="text-xs">🎁</span>
+                        <span className="text-[11px] text-emerald-700 font-semibold">+{formatCurrency(totalIncentives)}</span>
+                      </div>
+                    )}
+                    {totalDeductions > 0 && (
+                      <div className="flex items-center gap-1 bg-red-50 rounded-lg px-2.5 py-1.5 flex-1">
+                        <span className="text-xs">⚠️</span>
+                        <span className="text-[11px] text-red-600 font-semibold">-{formatCurrency(totalDeductions)}</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between mt-2 pt-2 border-t border-gray-100">
+                    <span className="text-xs font-bold text-gray-600">Net Pay</span>
+                    <span className={`text-base font-black ${netPay >= 0 ? "text-blue-700" : "text-red-600"}`}>{formatCurrency(netPay)}</span>
+                  </div>
+                </>
               )}
             </div>
 
